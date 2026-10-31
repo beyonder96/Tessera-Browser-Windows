@@ -23,7 +23,9 @@ import {
   Copy,
   Trash2,
   FolderMinus,
-  Check
+  Check,
+  Clock,
+  Bookmark
 } from 'lucide-react';
 import {
   type BrowserSettings,
@@ -127,6 +129,10 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [inputText, setInputText] = useState('');
+  const [localOmniResults, setLocalOmniResults] = useState<{
+    history: Array<{ id: string; title: string; url: string; timestamp: number }>;
+    bookmarks: Array<{ id: string; title: string; url: string; iconAsset?: string }>;
+  }>({ history: [], bookmarks: [] });
   const [hoveredTabInfo, setHoveredTabInfo] = useState<{ tab: BrowserTab; rect: DOMRect } | null>(null);
   const [tabContextMenu, setTabContextMenu] = useState<{
     tab: BrowserTab;
@@ -180,8 +186,23 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
   useEffect(() => {
     if (!isEditing) {
       setInputText(activeTab.isHomePage ? '' : activeTab.url);
+      setLocalOmniResults({ history: [], bookmarks: [] });
     }
   }, [activeTab.url, activeTab.isHomePage, isEditing]);
+
+  useEffect(() => {
+    const q = inputText.trim();
+    if (!q || !isEditing) {
+      setLocalOmniResults({ history: [], bookmarks: [] });
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void window.tesseraApi?.searchOmnibar?.(q, 4).then((res) => {
+        if (res) setLocalOmniResults(res);
+      });
+    }, 90);
+    return () => clearTimeout(timer);
+  }, [inputText, isEditing]);
 
   const startEditing = () => {
     setInputText(activeTab.isHomePage ? '' : activeTab.url);
@@ -245,64 +266,181 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
           pointerEvents: 'none'
         }}
       >
-        {/* Floating Search Autocomplete Suggestions Card */}
-        {isEditing && inputText.trim().length > 0 && searchSuggestions.length > 0 && (
-          <div
-            className="modal-animate-in"
-            style={{
-              width: 640,
-              maxWidth: 'calc(100vw - 36px)',
-              padding: 6,
-              borderRadius: 20,
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-hairline)',
-              boxShadow: 'var(--shadow-floating)',
-              pointerEvents: 'auto',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2
-            }}
-          >
-            {searchSuggestions.map((sug) => (
-              <div
-                key={sug}
-                onClick={() => {
-                  setIsEditing(false);
-                  onNavigate(sug);
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '8px 12px',
-                  borderRadius: 13,
-                  cursor: 'pointer',
-                  fontSize: 13.5
-                }}
-                onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <Search size={14} style={{ color: 'var(--text-tertiary)' }} />
-                  <span>{sug}</span>
-                </div>
-                <button
-                  type="button"
-                  title="Preencher na busca"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setInputText(sug);
-                    onQueryChange(sug);
-                    inputRef.current?.focus();
+        {/* Floating Omnibar Autocomplete Card (Open Tabs + Favorites + SQLite History + Web Suggestions) */}
+        {isEditing &&
+          inputText.trim().length > 0 &&
+          (searchSuggestions.length > 0 ||
+            localOmniResults.history.length > 0 ||
+            localOmniResults.bookmarks.length > 0) && (
+            <div
+              className="modal-animate-in"
+              style={{
+                width: 640,
+                maxWidth: 'calc(100vw - 36px)',
+                padding: 6,
+                borderRadius: 20,
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-hairline)',
+                boxShadow: 'var(--shadow-floating)',
+                pointerEvents: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                maxHeight: 380,
+                overflowY: 'auto'
+              }}
+            >
+              {/* 1. Abas Abertas Correspondentes */}
+              {visibleTabs
+                .filter(
+                  (t) =>
+                    t.id !== activeTab.id &&
+                    (t.title.toLowerCase().includes(inputText.toLowerCase()) ||
+                      t.url.toLowerCase().includes(inputText.toLowerCase()))
+                )
+                .slice(0, 2)
+                .map((matchingTab) => (
+                  <div
+                    key={`tab-${matchingTab.id}`}
+                    onClick={() => {
+                      setIsEditing(false);
+                      onSelectTab(matchingTab.id);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderRadius: 13,
+                      cursor: 'pointer',
+                      fontSize: 13.5
+                    }}
+                    onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                    onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                      <Sparkles size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                        <span style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {matchingTab.title}
+                        </span>
+                        <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          Alternar para guia aberta ({matchingTab.url})
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+              {/* 2. Favoritos Locais */}
+              {localOmniResults.bookmarks.map((bm) => (
+                <div
+                  key={`bm-${bm.id}`}
+                  onClick={() => {
+                    setIsEditing(false);
+                    onNavigate(bm.url);
                   }}
-                  style={{ color: 'var(--text-tertiary)', padding: 4 }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 12px',
+                    borderRadius: 13,
+                    cursor: 'pointer',
+                    fontSize: 13.5
+                  }}
+                  onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                  onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
                 >
-                  <ArrowUpRight size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <Bookmark size={14} style={{ color: '#FF9F0A', flexShrink: 0 }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                      <span style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {bm.title}
+                      </span>
+                      <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        Favorito • {bm.url}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {/* 3. Histórico Local FTS5 */}
+              {localOmniResults.history.map((h) => (
+                <div
+                  key={`hist-${h.id}`}
+                  onClick={() => {
+                    setIsEditing(false);
+                    onNavigate(h.url);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 12px',
+                    borderRadius: 13,
+                    cursor: 'pointer',
+                    fontSize: 13.5
+                  }}
+                  onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                  onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <Clock size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                      <span style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {h.title || h.url}
+                      </span>
+                      <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        Histórico • {h.url}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {/* 4. Sugestões de Busca Web */}
+              {searchSuggestions.map((sug) => (
+                <div
+                  key={`sug-${sug}`}
+                  onClick={() => {
+                    setIsEditing(false);
+                    onNavigate(sug);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 12px',
+                    borderRadius: 13,
+                    cursor: 'pointer',
+                    fontSize: 13.5
+                  }}
+                  onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                  onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Search size={14} style={{ color: 'var(--text-tertiary)' }} />
+                    <span>{sug}</span>
+                  </div>
+                  <button
+                    type="button"
+                    title="Preencher na busca"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setInputText(sug);
+                      onQueryChange(sug);
+                      inputRef.current?.focus();
+                    }}
+                    style={{ color: 'var(--text-tertiary)', padding: 4 }}
+                  >
+                    <ArrowUpRight size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
         {/* Optional Favorites Quick Bar */}
         {settings.showFavoritesBar && !isHomeCollapsed && !activeTab.isHomePage && (
@@ -397,6 +535,13 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
                     setDragOverAirTabId(null);
                   }}
                   onClick={() => onSelectTab(tab.id)}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onCloseTab(tab.id);
+                    }
+                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -1227,7 +1372,7 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
               {/* Voice Assistant / Microphone Button (Always visible in all tabs!) */}
               <button
                 onClick={onOpenVoiceAssistant}
-                title="Assistente de Voz / Diga 'Ei Tessera' (Ctrl+Shift+V ou Alt+V)"
+                title="Assistente de Voz / Diga 'Ei Tessera' (Ctrl+Alt+V ou Alt+M)"
                 className="squircle-press"
                 style={{
                   ...iconCircleBtnStyle,

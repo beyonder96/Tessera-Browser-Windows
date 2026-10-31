@@ -7,6 +7,32 @@ import {
 } from '../src/shared/privacyRules';
 import type { SiteSettings, TrackerCategory } from '../src/shared/types';
 
+const AUTH_PROTECTED_HOSTS: ReadonlySet<string> = new Set([
+  'accounts.google.com',
+  'accounts.youtube.com',
+  'gds.google.com',
+  'myaccount.google.com',
+  'oauth2.googleapis.com',
+  'apis.google.com',
+  'ssl.gstatic.com',
+  'www.gstatic.com',
+  'login.microsoftonline.com',
+  'login.live.com',
+  'appleid.apple.com'
+]);
+
+export function isAuthProtectedHostname(hostname: string): boolean {
+  const h = hostname.toLowerCase().trim();
+  if (!h) return false;
+  if (AUTH_PROTECTED_HOSTS.has(h)) return true;
+  return h.endsWith('.accounts.google.com') || h.endsWith('.gstatic.com');
+}
+
+export function getStandardChromiumUserAgent(): string {
+  const chromeMajor = (process.versions.chrome || '132.0.0.0').split('.')[0];
+  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
+}
+
 export interface BlockedRequestPayload {
   name: string;
   host: string;
@@ -32,54 +58,105 @@ export class PrivacyShieldController {
     this.siteSettingsMap = siteSettings || {};
   }
 
+  private async sanitizeUnauthenticatedGoogleRejectionCookies(ses: Electron.Session): Promise<void> {
+    try {
+      const googleCookies = await ses.cookies.get({ domain: 'google.com' });
+      const authCookieNames = new Set([
+        'SID',
+        'HSID',
+        'SSID',
+        '__Secure-1PSID',
+        '__Secure-3PSID'
+      ]);
+      const hasActiveGoogleSession = googleCookies.some((c) => authCookieNames.has(c.name));
+      if (hasActiveGoogleSession) {
+        return;
+      }
+
+      const accountCookies = await ses.cookies.get({ domain: 'accounts.google.com' });
+      for (const cookie of accountCookies) {
+        const cleanDomain = (cookie.domain || 'accounts.google.com').replace(/^\./, '');
+        const cookieUrl = `https://${cleanDomain}${cookie.path || '/'}`;
+        await ses.cookies.remove(cookieUrl, cookie.name).catch(() => {});
+      }
+    } catch {
+      // Ignore cookie inspection errors
+    }
+  }
+
   ensurePartitionConfigured(partitionName: string, onDownloadAttach?: (ses: Electron.Session) => void): void {
     if (this.configuredPartitions.has(partitionName)) return;
     this.configuredPartitions.add(partitionName);
 
-    const ses = session.fromPartition(partitionName);
+    const ses = partitionName === 'default' ? session.defaultSession : session.fromPartition(partitionName);
 
-    // Enterprise Homologated Chrome 120 LTS User-Agent
-    // Solves legacy ERP version gatekeepers (ex: CalcGraf requiring Chrome 0 to 120)
-    // and eliminates "Electron" / "Tessera" tokens so Google, WhatsApp Web & banks work 100%
-    const enterpriseChromeUa =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.225 Safari/537.36';
-    ses.setUserAgent(enterpriseChromeUa);
+    // Standard Chromium Reduced User-Agent aligned 1:1 with compiled Chromium major version (Client Hints / navigator.userAgentData)
+    // Eliminates "Electron" / "Tessera" wrapper tokens and version mismatches so Google Sign-In, WhatsApp Web & banks work 100%
+    const standardChromeUa = getStandardChromiumUserAgent();
+    ses.setUserAgent(standardChromeUa);
+    void this.sanitizeUnauthenticatedGoogleRejectionCookies(ses);
 
-    // Web Permissions Protocol Handler (Camera, Mic, Geo, Notifications, Clipboard)
+    // Web Permissions Protocol Handler (Camera, Mic, Geo, Notifications, Clipboard, Storage Access / OAuth)
     ses.setPermissionRequestHandler((wc, permission, callback, details) => {
-      let origin = '';
       try {
-        origin = new URL(details.requestingUrl || wc.getURL()).hostname.replace(/^www\./, '');
-      } catch {}
+        const win = this.getMainWindow();
+        const requestingUrl = (details && (details as { requestingUrl?: string }).requestingUrl) || '';
+        const currentUrl = wc.getURL() || requestingUrl;
 
-      const siteCfg = this.siteSettingsMap[origin];
+        // The Tessera Browser UI itself (Start page, AirBar, Voice Assistant, internal tools)
+        // must ALWAYS have microphone & media permissions granted!
+        const isAppWindow =
+          (win && !win.isDestroyed() && wc.id === win.webContents.id) ||
+          !currentUrl ||
+          currentUrl.startsWith('file:') ||
+          currentUrl.startsWith('http://localhost') ||
+          requestingUrl.startsWith('file:') ||
+          requestingUrl.startsWith('http://localhost');
 
-      switch (permission) {
-        case 'media':
-          // Default to allowed so Google Meet, WhatsApp Web, mic & video work smoothly,
-          // unless user has explicitly configured this host to block microphone and camera.
-          if (siteCfg?.microphoneAllowed === false && siteCfg?.cameraAllowed === false) {
-            callback(false);
-          } else {
+        if (isAppWindow) {
+          callback(true);
+          return;
+        }
+
+        let origin = '';
+        try {
+          origin = new URL(requestingUrl || currentUrl).hostname.replace(/^www\./, '');
+        } catch {}
+
+        const siteCfg = origin ? this.siteSettingsMap[origin] : undefined;
+
+        switch (permission) {
+          case 'media':
+            // Default to allowed so Google Meet, WhatsApp Web, mic & video work smoothly,
+            // unless user has explicitly configured this host to block microphone and camera.
+            if (siteCfg && siteCfg.microphoneAllowed === false && siteCfg.cameraAllowed === false) {
+              callback(false);
+            } else {
+              callback(true);
+            }
+            return;
+          case 'geolocation':
+            callback(!!siteCfg?.geolocationAllowed);
+            return;
+          case 'notifications':
+            callback(!!siteCfg?.notificationsAllowed);
+            return;
+          case 'clipboard-read':
+          case 'clipboard-sanitized-write':
+          case 'fullscreen':
+          case 'pointerLock':
+          case 'openExternal':
+          case 'storage-access':
+          case 'top-level-storage-access':
+          case 'window-management':
             callback(true);
-          }
-          break;
-        case 'geolocation':
-          callback(!!siteCfg?.geolocationAllowed);
-          break;
-        case 'notifications':
-          callback(!!siteCfg?.notificationsAllowed);
-          break;
-        case 'clipboard-read':
-        case 'clipboard-sanitized-write':
-        case 'fullscreen':
-        case 'pointerLock':
-        case 'openExternal':
-          callback(true);
-          break;
-        default:
-          callback(true);
-          break;
+            return;
+          default:
+            callback(true);
+            return;
+        }
+      } catch {
+        callback(false);
       }
     });
 
@@ -88,14 +165,22 @@ export class PrivacyShieldController {
       try {
         origin = new URL(requestingOrigin).hostname.replace(/^www\./, '');
       } catch {}
-      const siteCfg = this.siteSettingsMap[origin];
+      const siteCfg = origin ? this.siteSettingsMap[origin] : undefined;
 
       if (
         permission === 'clipboard-read' ||
         permission === 'clipboard-sanitized-write' ||
         permission === 'fullscreen' ||
-        permission === 'pointerLock'
+        permission === 'pointerLock' ||
+        permission === 'storage-access' ||
+        permission === 'top-level-storage-access'
       ) {
+        return true;
+      }
+      if (permission === 'media') {
+        if (siteCfg && siteCfg.microphoneAllowed === false && siteCfg.cameraAllowed === false) {
+          return false;
+        }
         return true;
       }
       if (permission === 'geolocation') return !!siteCfg?.geolocationAllowed;
@@ -117,13 +202,23 @@ export class PrivacyShieldController {
           return;
         }
 
+        const host = reqUrl.hostname;
+        const initiatorUrl = details.referrer || (details as { initiator?: string }).initiator || '';
         let pageOrigin = '';
-        if (details.referrer) {
+        let rawInitiatorHost = '';
+        if (initiatorUrl) {
           try {
-            pageOrigin = new URL(details.referrer).hostname.replace(/^www\./, '');
+            rawInitiatorHost = new URL(initiatorUrl).hostname.toLowerCase();
+            pageOrigin = rawInitiatorHost.replace(/^www\./, '');
           } catch {
             pageOrigin = '';
           }
+        }
+
+        // Never interfere with Google / OAuth / SSO authentication endpoints or their subresources
+        if (isAuthProtectedHostname(host) || isAuthProtectedHostname(rawInitiatorHost)) {
+          callback({ cancel: false });
+          return;
         }
 
         // Respect per-site whitelist from SiteSettingsModal
@@ -132,7 +227,6 @@ export class PrivacyShieldController {
           return;
         }
 
-        const host = reqUrl.hostname;
         // Do not block first-party resources from the exact same root domain
         if (pageOrigin && (host === pageOrigin || host.endsWith(`.${pageOrigin}`))) {
           callback({ cancel: false });
@@ -162,66 +256,6 @@ export class PrivacyShieldController {
       }
 
       callback({ cancel: false });
-    });
-
-    // Granular Site Permissions (Camera, Microphone, Geolocation, Notifications)
-    ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
-      try {
-        const win = this.getMainWindow();
-        const requestingUrl = (details && (details as any).requestingUrl) || '';
-        const currentUrl = webContents.getURL() || requestingUrl;
-
-        // The Tessera Browser UI itself (Start page, AirBar, Voice Assistant, internal tools)
-        // must ALWAYS have microphone & media permissions granted!
-        const isAppWindow =
-          (win && !win.isDestroyed() && webContents.id === win.webContents.id) ||
-          !currentUrl ||
-          currentUrl.startsWith('file:') ||
-          currentUrl.startsWith('http://localhost') ||
-          requestingUrl.startsWith('file:') ||
-          requestingUrl.startsWith('http://localhost');
-
-        if (isAppWindow) {
-          callback(true);
-          return;
-        }
-
-        const originHost = new URL(currentUrl).hostname.replace(/^www\./, '');
-        const cfg = this.siteSettingsMap[originHost];
-
-        if (permission === 'fullscreen' || permission === 'clipboard-sanitized-write') {
-          callback(true);
-          return;
-        }
-
-        if (!cfg) {
-          // Secure privacy-first defaults
-          if (permission === 'notifications' || permission === 'geolocation' || permission === 'media') {
-            callback(false);
-            return;
-          }
-          callback(true);
-          return;
-        }
-
-        if (permission === 'media') {
-          callback(cfg.cameraAllowed || cfg.microphoneAllowed);
-          return;
-        }
-        if (permission === 'geolocation') {
-          callback(cfg.geolocationAllowed);
-          return;
-        }
-        if (permission === 'notifications') {
-          callback(cfg.notificationsAllowed);
-          return;
-        }
-      } catch {
-        callback(false);
-        return;
-      }
-
-      callback(false);
     });
 
     if (onDownloadAttach) {

@@ -25,6 +25,14 @@ export interface ElectronWebviewElement extends HTMLElement {
   capturePage: () => Promise<{ toDataURL: () => string }>;
   insertCSS: (css: string) => Promise<string>;
   removeInsertedCSS: (key: string) => Promise<void>;
+  cut: () => void;
+  copy: () => void;
+  paste: () => void;
+  selectAll: () => void;
+  setZoomFactor: (factor: number) => void;
+  getZoomFactor: () => number;
+  print: () => void;
+  inspectElement: (x: number, y: number) => void;
 }
 
 declare global {

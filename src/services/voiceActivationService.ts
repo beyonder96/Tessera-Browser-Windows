@@ -509,8 +509,8 @@ class VoiceActivationService {
         const avg = sum / dataArray.length;
         const normalized = avg / 128;
 
-        // Sound trigger threshold
-        if (normalized > 0.12 && !this.wakeWordCheckInProgress) {
+        // Sound trigger threshold (raised from 0.12 to 0.22 to eliminate ambient noise/typing/breathing)
+        if (normalized > 0.22 && !this.wakeWordCheckInProgress) {
           this.captureWakeWordSnippet(stream);
         }
 
@@ -557,21 +557,27 @@ class VoiceActivationService {
       const b64 = await blobToBase64(blob);
 
       if (window.tesseraApi?.aiTranscribeAudio) {
-        const text = await window.tesseraApi.aiTranscribeAudio(b64, blob.type);
+        // Pass true to indicate wake word check (uses unbiased prompt to avoid hallucinating 'Tessera' from noise)
+        const text = await window.tesseraApi.aiTranscribeAudio(b64, blob.type, true);
         const raw = (text || '').trim();
 
+        // Strict wake-word regex requiring clear intentional trigger ('ei tessera', 'ok tessera', 'olá tessera', 'hey tessera', 'ouça tessera' or standalone 'tessera')
+        // Eliminates false triggers from common words like 'terceira', 'que será', 'disse era', 'de cera', 'tess'
         const wakeWordRegex =
-          /(?:^|\s)(?:ei|ok|hey|ol[aá]|a[ií]|e\s+a[ií])?\s*(?:t[eé][sc][sc]?[eé]ra|te\s+serra|teceira|terceira|tess|tessa|disse\s+era|de\s+cera|que\s+ser[aá])[\s,.:!-]*(.*)$/i;
+          /(?:^|\b)(?:(?:ei|ok|hey|ol[aá]|ou[çc]a)\s+t[eé]ss?era|t[eé]ss?era\b)[\s,.:!-]*(.*)$/i;
 
         const match = raw.match(wakeWordRegex);
         if (match) {
           const trailing = match[1]?.trim() || '';
           this.activateManualListening();
 
-          if (trailing) {
+          // Only auto-process trailing phrase if it contains a real command (>= 3 chars, not simple fillers)
+          if (trailing && trailing.length >= 3 && !/^(?:[ée]|hum|ah|uh|ok|ent[aã]o|hein)$/i.test(trailing)) {
             setTimeout(() => {
-              this.processRecognizedCommand(trailing);
-            }, 300);
+              if (this.state.isActive && this.state.status === 'listening') {
+                this.processRecognizedCommand(trailing);
+              }
+            }, 450);
           }
         }
       }

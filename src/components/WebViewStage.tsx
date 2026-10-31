@@ -24,6 +24,7 @@ import {
   SUMMARY_EXTRACTION_SCRIPT
 } from '../shared/domScripts';
 import { extractCleanHost } from '../shared/searchEngines';
+import type { WebContextMenuData } from './WebContextMenu';
 
 export interface WebViewStageHandle {
   goBack: () => void;
@@ -48,6 +49,11 @@ export interface WebViewStageHandle {
   toggleMediaPlayPause: (tabId?: string) => Promise<boolean>;
   toggleMediaMute: (tabId?: string) => void;
   triggerPictureInPicture: (tabId?: string) => Promise<boolean>;
+  executeEditCommand: (command: 'cut' | 'copy' | 'paste' | 'selectAll', tabId?: string) => void;
+  setZoomFactor: (factor: number, tabId?: string) => void;
+  getZoomFactor: (tabId?: string) => number;
+  printActiveTab: (tabId?: string) => void;
+  inspectElement: (x: number, y: number, tabId?: string) => void;
 }
 
 interface WebViewStageProps {
@@ -66,6 +72,32 @@ interface WebViewStageProps {
   onListenSelection: (selectedText: string) => void;
   onFindMatchesUpdated: (activeMatchOrdinal: number, matches: number) => void;
   onOpenNewTab?: (url: string, isIncognito?: boolean) => void;
+  onShowContextMenu?: (data: WebContextMenuData) => void;
+  onHtmlFullScreenChange?: (isFullScreen: boolean) => void;
+}
+
+function isAuthProtectedUrl(rawUrl: string): boolean {
+  try {
+    const h = new URL(rawUrl).hostname.toLowerCase();
+    return (
+      h === 'accounts.google.com' ||
+      h === 'accounts.youtube.com' ||
+      h === 'gds.google.com' ||
+      h.endsWith('.accounts.google.com') ||
+      h === 'login.microsoftonline.com' ||
+      h === 'login.live.com' ||
+      h === 'appleid.apple.com'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeInitialTabUrl(rawUrl: string): string {
+  if (/^https:\/\/accounts\.google\.com\/(v3\/)?signin\/rejected/i.test(rawUrl)) {
+    return 'https://accounts.google.com/';
+  }
+  return rawUrl;
 }
 
 export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
@@ -85,7 +117,9 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       onAskAiWithSelection,
       onListenSelection,
       onFindMatchesUpdated,
-      onOpenNewTab
+      onOpenNewTab,
+      onShowContextMenu,
+      onHtmlFullScreenChange
     },
     ref
   ) => {
@@ -109,7 +143,9 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       try {
         const wcId = wv.getWebContentsId();
         void window.tesseraApi.setForceDarkForWebContents(wcId, enabled);
-        if (enabled) {
+        const currentUrl = wv.getURL() || '';
+        const shouldInjectCss = enabled && !isAuthProtectedUrl(currentUrl);
+        if (shouldInjectCss) {
           if (!darkCssKeys.current[tabId]) {
             const key = await wv.insertCSS(SMART_FORCE_DARK_CSS);
             darkCssKeys.current[tabId] = key;
@@ -297,6 +333,51 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         } catch {
           return false;
         }
+      },
+      executeEditCommand: (command, tabId) => {
+        const targetId = tabId || activeTabId;
+        const wv = webviewRefs.current[targetId];
+        if (!wv) return;
+        try {
+          if (command === 'cut') wv.cut();
+          else if (command === 'copy') wv.copy();
+          else if (command === 'paste') wv.paste();
+          else if (command === 'selectAll') wv.selectAll();
+        } catch {}
+      },
+      setZoomFactor: (factor, tabId) => {
+        const targetId = tabId || activeTabId;
+        const wv = webviewRefs.current[targetId];
+        if (!wv) return;
+        try {
+          wv.setZoomFactor(factor);
+        } catch {}
+      },
+      getZoomFactor: (tabId) => {
+        const targetId = tabId || activeTabId;
+        const wv = webviewRefs.current[targetId];
+        if (!wv) return 1.0;
+        try {
+          return wv.getZoomFactor();
+        } catch {
+          return 1.0;
+        }
+      },
+      printActiveTab: (tabId) => {
+        const targetId = tabId || activeTabId;
+        const wv = webviewRefs.current[targetId];
+        if (!wv) return;
+        try {
+          wv.print();
+        } catch {}
+      },
+      inspectElement: (x, y, tabId) => {
+        const targetId = tabId || activeTabId;
+        const wv = webviewRefs.current[targetId];
+        if (!wv) return;
+        try {
+          wv.inspectElement(x, y);
+        } catch {}
       }
     }));
 
@@ -369,6 +450,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       el.addEventListener('did-navigate', (e: Event) => {
         const navEv = e as unknown as { url: string };
         initializedUrls.current[tab.id] = navEv.url;
+        delete darkCssKeys.current[tab.id];
         setSelectionPopup(null);
         onUpdateTab(tab.id, {
           url: navEv.url,
@@ -408,11 +490,20 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
           if (tab.isMuted) {
             el.setAudioMuted(true);
           }
+
+          const currentUrl = el.getURL();
+          if (isAuthProtectedUrl(currentUrl)) {
+            if (tab.id === activeTabId) {
+              onReaderAvailabilityChanged(false);
+            }
+            return;
+          }
+
           if (settings.forceDarkPages) {
             void applyForceDarkToWebview(tab.id, el, true);
           }
 
-          const host = extractCleanHost(el.getURL());
+          const host = extractCleanHost(currentUrl);
           const whitelisted = siteSettings[host]?.adBlockWhitelisted;
           if (settings.adBlockEnabled && !whitelisted) {
             void el.executeJavaScript(COSMETIC_ADBLOCK_SCRIPT).catch(() => {});
@@ -509,6 +600,34 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
           setSelectionPopup(null);
         }
       });
+
+      el.addEventListener('context-menu', (e: Event) => {
+        e.preventDefault();
+        const p = (e as unknown as { params?: any }).params || {};
+        onShowContextMenu?.({
+          x: p.x ?? 0,
+          y: p.y ?? 0,
+          linkURL: p.linkURL,
+          linkText: p.linkText,
+          srcURL: p.srcURL,
+          mediaType: p.mediaType,
+          selectionText: p.selectionText,
+          isEditable: p.isEditable,
+          dictionarySuggestions: p.dictionarySuggestions || [],
+          editFlags: p.editFlags,
+          tabId: tab.id,
+          pageUrl: el.getURL() || tab.url,
+          pageTitle: el.getTitle() || tab.title
+        });
+      });
+
+      el.addEventListener('enter-html-full-screen', () => {
+        onHtmlFullScreenChange?.(true);
+      });
+
+      el.addEventListener('leave-html-full-screen', () => {
+        onHtmlFullScreenChange?.(false);
+      });
     };
 
     const webTabs = tabs.filter((t) => !t.isHomePage);
@@ -518,7 +637,9 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         {webTabs.map((tab) => {
           const isCurrent = tab.id === activeTabId;
           const partition = tab.isIncognito ? 'incognito_session' : `persist:${tab.spaceId}`;
-          const initialSrc = tab.url || initializedUrls.current[tab.id] || 'about:blank';
+          // Freeze initial src per tab mount to eliminate duplicate loads and SPA resets
+          const initialSrc =
+            initializedUrls.current[tab.id] || sanitizeInitialTabUrl(tab.url || 'about:blank');
           initializedUrls.current[tab.id] = initialSrc;
           const failure = failedTabs[tab.id];
 
@@ -538,7 +659,6 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
                   src={initialSrc}
                   partition={partition}
                   preload={webviewPreloadUrl}
-                  useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.225 Safari/537.36"
                   allowpopups={true}
                   style={{ width: '100%', height: '100%', border: 'none' }}
                 />

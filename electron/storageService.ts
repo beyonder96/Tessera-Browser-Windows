@@ -16,6 +16,9 @@ import {
   hexToArgb
 } from '../src/shared/wallpapers';
 import { normalizeSearchEngineId } from '../src/shared/searchEngines';
+import { SqliteDatabase } from './database/sqliteDatabase';
+import { AssetStore } from './database/assetStore';
+import { LegacyMigrator } from './database/legacyMigrator';
 
 export function createDefaultPersistedState(): PersistedAppState {
   const defaultTabId = 'default-tab';
@@ -120,39 +123,58 @@ export function mergeAndroidCompatibleBackup(
     'ecosia.org': './assets/brands/ecosia.svg'
   };
 
-  const restoredBookmarks: SpeedDialItem[] = [];
+  // 1. Non-destructive merge of Bookmarks (match by normalized URL)
+  let importedBookmarksCount = 0;
+  const existingBookmarkUrls = new Set(currentState.speedDialItems.map((b) => b.url.toLowerCase()));
+  const mergedBookmarks = [...currentState.speedDialItems];
+
   if (Array.isArray(parsed.bookmarks)) {
     for (const b of parsed.bookmarks) {
       if (!b || typeof b.url !== 'string' || !b.url.trim()) continue;
-      const argb = typeof b.badgeColor === 'number' ? b.badgeColor : 0xff0288d1;
-      const matchedBrand = Object.entries(brandMap).find(([domain]) => b.url.toLowerCase().includes(domain));
-      restoredBookmarks.push({
-        id: b.id || crypto.randomUUID(),
-        title: b.title || b.url,
-        url: b.url,
-        iconAsset: matchedBrand?.[1],
-        badgeColor: argb,
-        badgeColorHex: argbToHex(argb)
-      });
+      const normUrl = b.url.toLowerCase();
+      if (!existingBookmarkUrls.has(normUrl)) {
+        existingBookmarkUrls.add(normUrl);
+        const argb = typeof b.badgeColor === 'number' ? b.badgeColor : 0xff0288d1;
+        const matchedBrand = Object.entries(brandMap).find(([domain]) => normUrl.includes(domain));
+        mergedBookmarks.push({
+          id: b.id || crypto.randomUUID(),
+          title: b.title || b.url,
+          url: b.url,
+          iconAsset: matchedBrand?.[1],
+          badgeColor: argb,
+          badgeColorHex: argbToHex(argb)
+        });
+        importedBookmarksCount++;
+      }
     }
   }
 
-  const restoredHistory: HistoryEntry[] = [];
+  // 2. Non-destructive merge of History (match by normalized URL)
+  let importedHistoryCount = 0;
+  const existingHistoryUrls = new Set(currentState.history.map((h) => h.url.toLowerCase()));
+  const mergedHistory = [...currentState.history];
+
   if (Array.isArray(parsed.history)) {
     for (const h of parsed.history) {
       if (!h || typeof h.url !== 'string' || !h.url.trim()) continue;
-      restoredHistory.push({
-        id: h.id || crypto.randomUUID(),
-        title: h.title || '',
-        url: h.url,
-        timestamp: typeof h.timestamp === 'number' ? h.timestamp : Date.now(),
-        spaceId: h.spaceId && h.spaceId.trim() ? h.spaceId : null
-      });
+      const normUrl = h.url.toLowerCase();
+      if (!existingHistoryUrls.has(normUrl)) {
+        existingHistoryUrls.add(normUrl);
+        mergedHistory.push({
+          id: h.id || crypto.randomUUID(),
+          title: h.title || '',
+          url: h.url,
+          timestamp: typeof h.timestamp === 'number' ? h.timestamp : Date.now(),
+          spaceId: h.spaceId && h.spaceId.trim() ? h.spaceId : null
+        });
+        importedHistoryCount++;
+      }
     }
   }
 
+  // 3. Restore Spaces (Android backup defines configured spaces)
   const restoredSpaces: BrowserSpace[] = [];
-  if (Array.isArray(parsed.spaces)) {
+  if (Array.isArray(parsed.spaces) && parsed.spaces.length > 0) {
     for (const s of parsed.spaces) {
       if (!s || typeof s.id !== 'string' || !s.name) continue;
       const argb = typeof s.colorArgb === 'number' ? s.colorArgb : 0xff0288d1;
@@ -167,6 +189,7 @@ export function mergeAndroidCompatibleBackup(
     }
   }
 
+  // 4. Settings merge (only if present in backup)
   const nextSettings = { ...currentState.settings };
   if (parsed.settings && typeof parsed.settings === 'object') {
     if (typeof parsed.settings.isDarkMode === 'boolean') nextSettings.isDarkMode = parsed.settings.isDarkMode;
@@ -191,71 +214,85 @@ export function mergeAndroidCompatibleBackup(
 
   const nextState: PersistedAppState = {
     ...currentState,
-    speedDialItems: restoredBookmarks.length > 0 ? restoredBookmarks : currentState.speedDialItems,
-    history: restoredHistory.length > 0 ? restoredHistory : currentState.history,
+    speedDialItems: mergedBookmarks,
+    history: mergedHistory,
     spaces: restoredSpaces.length > 0 ? restoredSpaces : currentState.spaces,
     settings: nextSettings
   };
 
   return {
     nextState,
-    importedBookmarks: restoredBookmarks.length,
-    importedHistory: restoredHistory.length,
+    importedBookmarks: importedBookmarksCount,
+    importedHistory: importedHistoryCount,
     importedSpaces: restoredSpaces.length
   };
 }
 
 export class StorageService {
-  private readonly stateFilePath: string;
+  private readonly assetStore: AssetStore;
+  private readonly sqliteDb: SqliteDatabase;
+  private readonly migrator: LegacyMigrator;
+  private cachedState: PersistedAppState | null = null;
 
   constructor(userDataDir: string) {
     fs.mkdirSync(userDataDir, { recursive: true });
-    this.stateFilePath = path.join(userDataDir, 'tessera_state_v1.json');
+    this.assetStore = new AssetStore(userDataDir);
+    this.sqliteDb = new SqliteDatabase(userDataDir, this.assetStore);
+    this.migrator = new LegacyMigrator(userDataDir, this.sqliteDb, this.assetStore);
   }
 
-  loadState(): PersistedAppState {
-    const defaults = createDefaultPersistedState();
-    if (!fs.existsSync(this.stateFilePath)) {
-      return defaults;
+  getAssetStore(): AssetStore {
+    return this.assetStore;
+  }
+
+  getSqliteDatabase(): SqliteDatabase {
+    return this.sqliteDb;
+  }
+
+  async loadState(): Promise<PersistedAppState> {
+    if (this.cachedState) {
+      return this.cachedState;
     }
-    try {
-      const raw = fs.readFileSync(this.stateFilePath, 'utf-8');
-      const parsed = JSON.parse(raw) as Partial<PersistedAppState>;
-      return {
-        ...defaults,
-        ...parsed,
-        settings: {
-          ...defaults.settings,
-          ...(parsed.settings || {})
-        },
-        privacyStats: {
-          ...defaults.privacyStats,
-          ...(parsed.privacyStats || {}),
-          byCategory: {
-            ...defaults.privacyStats.byCategory,
-            ...(parsed.privacyStats?.byCategory || {})
-          }
-        },
-        // Never persist ephemeral incognito tabs across cold restarts
-        tabs:
-          Array.isArray(parsed.tabs) && parsed.tabs.filter((t) => !t.isIncognito).length > 0
-            ? parsed.tabs.filter((t) => !t.isIncognito)
-            : defaults.tabs
-      };
-    } catch {
-      return defaults;
+    const state = await this.migrator.migrateIfNeeded(createDefaultPersistedState);
+    this.cachedState = state;
+    return state;
+  }
+
+  getCachedState(): PersistedAppState {
+    return this.cachedState || createDefaultPersistedState();
+  }
+
+  async saveState(state: PersistedAppState): Promise<void> {
+    this.cachedState = state;
+    await this.sqliteDb.saveFullState(state);
+  }
+
+  async recordHistoryVisit(entry: HistoryEntry): Promise<void> {
+    await this.sqliteDb.recordHistoryVisit(entry);
+    if (this.cachedState) {
+      const idx = this.cachedState.history.findIndex((h) => h.url === entry.url);
+      if (idx !== -1) {
+        this.cachedState.history[idx] = entry;
+      } else {
+        this.cachedState.history.unshift(entry);
+      }
     }
   }
 
-  saveState(state: PersistedAppState): void {
-    const cleanState: PersistedAppState = {
-      ...state,
-      tabs: state.tabs.filter((t) => !t.isIncognito),
-      history: state.history.slice(0, 1000),
-      downloads: state.downloads.slice(0, 120)
-    };
-    const tmpPath = `${this.stateFilePath}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(cleanState, null, 2), 'utf-8');
-    fs.renameSync(tmpPath, this.stateFilePath);
+  async searchOmnibar(query: string, limit = 8): Promise<{ history: HistoryEntry[]; bookmarks: SpeedDialItem[] }> {
+    return this.sqliteDb.searchOmnibar(query, limit);
+  }
+
+  async mergeBackup(rawJson: string): Promise<{
+    nextState: PersistedAppState;
+    importedBookmarks: number;
+    importedHistory: number;
+    importedSpaces: number;
+  }> {
+    const currentState = await this.loadState();
+    const result = mergeAndroidCompatibleBackup(currentState, rawJson);
+    this.cachedState = result.nextState;
+    await this.sqliteDb.saveFullState(result.nextState);
+    return result;
   }
 }

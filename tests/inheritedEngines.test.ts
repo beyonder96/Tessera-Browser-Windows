@@ -161,4 +161,24 @@ describe('Assistente de Voz Tessera & Processamento de Comandos', () => {
       type: 'pip_video'
     });
   });
+
+  it('previne falsos positivos de palavras comuns em português (terceira, que será, disse era, etc)', () => {
+    const wakeWordRegex =
+      /(?:^|\b)(?:(?:ei|ok|hey|ol[aá]|ou[çc]a)\s+t[eé]ss?era|t[eé]ss?era\b)[\s,.:!-]*(.*)$/i;
+
+    // Deve ativar com intenção clara
+    expect(wakeWordRegex.test('Ei Tessera')).toBe(true);
+    expect(wakeWordRegex.test('Ok Tessera pesquise notícias')).toBe(true);
+    expect(wakeWordRegex.test('Olá Tessera resumir página')).toBe(true);
+    expect(wakeWordRegex.test('Hey Tessera')).toBe(true);
+    expect(wakeWordRegex.test('Tessera abrir google.com')).toBe(true);
+
+    // NUNCA deve ativar com termos comuns do português que antes causavam falsos positivos
+    expect(wakeWordRegex.test('esta é a terceira aba')).toBe(false);
+    expect(wakeWordRegex.test('o que será que aconteceu')).toBe(false);
+    expect(wakeWordRegex.test('ele disse era verdade')).toBe(false);
+    expect(wakeWordRegex.test('boneco de cera')).toBe(false);
+    expect(wakeWordRegex.test('executando os testes unitários')).toBe(false);
+    expect(wakeWordRegex.test('um assunto muito interessante')).toBe(false);
+  });
 });

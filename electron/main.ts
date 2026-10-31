@@ -6,6 +6,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeTheme,
   session,
   shell,
   webContents
@@ -15,15 +16,20 @@ import {
   serializeToAndroidCompatibleBackup,
   StorageService
 } from './storageService';
-import { PrivacyShieldController } from './privacyEngine';
+import { getStandardChromiumUserAgent, PrivacyShieldController } from './privacyEngine';
 import { TesseraAiService } from './aiService';
 import { DownloadController } from './downloadManager';
 import { LocalBridgeServer } from './localBridgeServer';
+import { TesseraSyncService } from './sync/tesseraSyncService';
 import { UpdateService } from './updateService';
-import type { PersistedAppState, SiteSettings } from '../src/shared/types';
+import type { HistoryEntry, PersistedAppState, SiteSettings } from '../src/shared/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Ensure global Chromium Reduced User-Agent (without "Electron/" or app wrapper tokens)
+// is applied before any session, worker, popup BrowserWindow, or <webview> is created.
+app.userAgentFallback = getStandardChromiumUserAgent();
 
 let mainWindow: BrowserWindow | null = null;
 let latestStateCache: PersistedAppState | null = null;
@@ -41,6 +47,7 @@ function extractHttpUrlFromArgv(argv: string[]): string | null {
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
+  process.exit(0);
 }
 
 app.on('second-instance', (_event, commandLine) => {
@@ -54,15 +61,32 @@ app.on('second-instance', (_event, commandLine) => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const userDataDir = app.getPath('userData');
   const storageService = new StorageService(userDataDir);
   const aiService = new TesseraAiService(userDataDir);
   const privacyController = new PrivacyShieldController(() => mainWindow);
   const downloadController = new DownloadController(() => mainWindow);
   const updateController = new UpdateService(() => mainWindow);
+  const syncService = new TesseraSyncService({
+    sqliteDb: storageService.getSqliteDatabase(),
+    getCurrentTabs: () => latestStateCache?.tabs.filter((t) => !t.isIncognito) || [],
+    onOpenReceivedUrl: (url) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('tessera:open-external-url', url);
+      }
+    },
+    onDeviceConnected: (name) => {
+      console.log('[TesseraSync] Dispositivo conectado via Wi-Fi:', name);
+    }
+  });
 
-  latestStateCache = storageService.loadState();
+  latestStateCache = await storageService.loadState();
+  void syncService.start().catch((err) => console.warn('[TesseraSync] Could not start sync service:', err));
+  nativeTheme.themeSource =
+    latestStateCache.settings.isDarkMode || latestStateCache.settings.forceDarkPages
+      ? 'dark'
+      : 'light';
   privacyController.updateConfig(latestStateCache.settings.adBlockEnabled, latestStateCache.siteSettings);
 
   // Pre-configure default space partitions
@@ -75,7 +99,8 @@ app.whenReady().then(() => {
     downloadController.attachToSession(ses)
   );
 
-  // Guarantee defaultSession grants media (microphone / audio) for main window UI
+  // Guarantee defaultSession uses standard Chromium UA and grants media (microphone / audio) for main window UI
+  session.defaultSession.setUserAgent(getStandardChromiumUserAgent());
   session.defaultSession.setPermissionRequestHandler(
     (_wc: Electron.WebContents, _permission: string, callback: (grant: boolean) => void) => {
       callback(true);
@@ -86,7 +111,7 @@ app.whenReady().then(() => {
   const localBridge = new LocalBridgeServer({
     getActivePageInfo: () => activeBridgePageInfo,
     getBackupJson: () => {
-      const st = latestStateCache || storageService.loadState();
+      const st = latestStateCache || storageService.getCachedState();
       return JSON.stringify(serializeToAndroidCompatibleBackup(st), null, 2);
     },
     onReceiveUrlFromPhone: (url) => {
@@ -94,11 +119,9 @@ app.whenReady().then(() => {
         mainWindow.webContents.send('tessera:open-external-url', url);
       }
     },
-    onReceiveBackupFromPhone: (rawJson) => {
-      const current = latestStateCache || storageService.loadState();
-      const result = mergeAndroidCompatibleBackup(current, rawJson);
+    onReceiveBackupFromPhone: async (rawJson) => {
+      const result = await storageService.mergeBackup(rawJson);
       latestStateCache = result.nextState;
-      storageService.saveState(result.nextState);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('tessera:bridge-state-imported', result);
       }
@@ -187,7 +210,22 @@ app.whenReady().then(() => {
       } else if (isCtrl && input.shift && key === 'x') {
         event.preventDefault();
         dispatchShortcut('pip-toggle');
-      } else if ((isCtrl && input.shift && key === 'v') || (input.alt && key === 'v')) {
+      } else if (isCtrl && !input.shift && (key === '=' || key === '+')) {
+        event.preventDefault();
+        dispatchShortcut('zoom-in');
+      } else if (isCtrl && !input.shift && key === '-') {
+        event.preventDefault();
+        dispatchShortcut('zoom-out');
+      } else if (isCtrl && !input.shift && key === '0') {
+        event.preventDefault();
+        dispatchShortcut('zoom-reset');
+      } else if (isCtrl && !input.shift && key === 'p') {
+        event.preventDefault();
+        dispatchShortcut('print');
+      } else if (input.key === 'F11') {
+        event.preventDefault();
+        dispatchShortcut('toggle-fullscreen');
+      } else if ((isCtrl && input.alt && key === 'v') || (input.alt && key === 'm')) {
         event.preventDefault();
         dispatchShortcut('voice-activate');
       }
@@ -200,16 +238,21 @@ app.whenReady().then(() => {
     if (contents.getType() === 'webview') {
       contents.setWindowOpenHandler((details) => {
         const url = details.url;
+        const isOAuthPopupUrl =
+          /^https:\/\/(accounts\.google\.com\/(o\/oauth2|gsi|ServiceLogin)|login\.microsoftonline\.com|appleid\.apple\.com)/i.test(
+            url
+          );
         // Check if this is a popup window test, OAuth popup, or auxiliary window with dimensions
         const isPopupTestOrAuxiliary =
           url === 'about:blank' ||
           !url ||
           !!details.features ||
-          details.disposition === 'new-window';
+          details.disposition === 'new-window' ||
+          isOAuthPopupUrl;
 
         if (isPopupTestOrAuxiliary) {
-          // Allow popup creation so window.open returns a real WindowProxy object!
-          // Solves ERP/CalcGraf "A janela pop-up foi bloqueada automaticamente!"
+          // Allow popup creation sharing the exact Space session/cookies (contents.session)
+          // so OAuth popups (Google Sign-In) and ERP/CalcGraf window.open work natively!
           return {
             action: 'allow',
             overrideBrowserWindowOptions: {
@@ -217,11 +260,12 @@ app.whenReady().then(() => {
               modal: false,
               autoHideMenuBar: true,
               width: 900,
-              height: 650,
+              height: 680,
               webPreferences: {
+                session: contents.session,
                 nodeIntegration: false,
                 contextIsolation: true,
-                preload: webviewPreloadPath,
+                sandbox: true,
                 plugins: true
               }
             }
@@ -352,17 +396,27 @@ app.whenReady().then(() => {
   ipcMain.handle('tessera:window-is-maximized', () => mainWindow?.isMaximized() ?? false);
   ipcMain.on('tessera:window-close', () => mainWindow?.close());
 
-  ipcMain.handle('tessera:load-state', () => {
-    latestStateCache = storageService.loadState();
+  ipcMain.handle('tessera:load-state', async () => {
+    latestStateCache = await storageService.loadState();
     return latestStateCache;
   });
 
-  ipcMain.handle('tessera:save-state', (_e, nextState: PersistedAppState) => {
+  ipcMain.handle('tessera:save-state', async (_e, nextState: PersistedAppState) => {
     latestStateCache = nextState;
-    storageService.saveState(nextState);
+    await storageService.saveState(nextState);
+    nativeTheme.themeSource =
+      nextState.settings.isDarkMode || nextState.settings.forceDarkPages ? 'dark' : 'light';
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setBackgroundColor(nextState.settings.isDarkMode ? '#000000' : '#F7F4EB');
     }
+  });
+
+  ipcMain.handle('tessera:search-omnibar', async (_e, query: string, limit?: number) => {
+    return await storageService.searchOmnibar(query, limit);
+  });
+
+  ipcMain.handle('tessera:record-history-visit', async (_e, entry: HistoryEntry) => {
+    await storageService.recordHistoryVisit(entry);
   });
 
   ipcMain.handle('tessera:ensure-partition', (_e, partitionName: string) => {
@@ -382,22 +436,19 @@ app.whenReady().then(() => {
     }
   );
 
-  // Authentic Blink AlgorithmicDarkening via Chromium DevTools Protocol (matches Android WebSettingsCompat.FORCE_DARK_ON)
+  // Native prefers-color-scheme synchronization via Electron nativeTheme (avoids attaching CDP wc.debugger,
+  // which triggers Google Sign-In "This browser or app may not be secure" remote-debugging blocks!)
   ipcMain.handle('tessera:set-force-dark', async (_e, wcId: number, enabled: boolean) => {
     const wc = webContents.fromId(wcId);
-    if (!wc || wc.isDestroyed()) return;
-    try {
-      if (!wc.debugger.isAttached()) {
-        wc.debugger.attach('1.3');
+    if (wc && !wc.isDestroyed() && wc.debugger.isAttached()) {
+      try {
+        wc.debugger.detach();
+      } catch {
+        // Ignore detach errors
       }
-      await wc.debugger.sendCommand('Emulation.setEmulatedMedia', {
-        media: 'screen',
-        features: [{ name: 'prefers-color-scheme', value: enabled ? 'dark' : 'light' }]
-      });
-      await wc.debugger.sendCommand('Emulation.setAutoDarkModeOverride', { enabled });
-    } catch {
-      // Ignore if debugger busy
     }
+    const preferDark = enabled || Boolean(latestStateCache?.settings.isDarkMode);
+    nativeTheme.themeSource = preferDark ? 'dark' : 'light';
   });
 
   ipcMain.handle('tessera:export-pdf', async (_e, wcId: number, suggestedTitle: string) => {
@@ -476,7 +527,7 @@ app.whenReady().then(() => {
     const raw = fs.readFileSync(filePaths[0], 'utf-8');
     const result = mergeAndroidCompatibleBackup(currentState, raw);
     latestStateCache = result.nextState;
-    storageService.saveState(result.nextState);
+    await storageService.saveState(result.nextState);
     return result;
   });
 
@@ -492,19 +543,38 @@ app.whenReady().then(() => {
   ipcMain.handle('tessera:ai-set-key', (_e, provider, key) => aiService.setApiKey(provider, key));
   ipcMain.handle('tessera:ai-summary', (_e, params) => aiService.generateSummary(params));
   ipcMain.handle('tessera:ai-ask', (_e, params) => aiService.askQuestion(params));
-  ipcMain.handle('tessera:ai-transcribe-audio', async (_e, base64Audio: string, mimeType: string) => {
-    const buffer = Buffer.from(base64Audio, 'base64');
-    return aiService.transcribeAudio(buffer, mimeType);
-  });
+  ipcMain.handle(
+    'tessera:ai-transcribe-audio',
+    async (_e, base64Audio: string, mimeType: string, isWakeWordCheck?: boolean) => {
+      const buffer = Buffer.from(base64Audio, 'base64');
+      return aiService.transcribeAudio(buffer, mimeType, Boolean(isWakeWordCheck));
+    }
+  );
 
-  // Local Wi-Fi Bridge
+  // Local Wi-Fi Bridge & Tessera Sync v2
   ipcMain.handle('tessera:bridge-start', () => localBridge.start());
   ipcMain.handle('tessera:bridge-stop', () => localBridge.stop());
   ipcMain.handle('tessera:bridge-status', () => localBridge.getStatus());
+  ipcMain.handle('tessera:sync-info', () => syncService.getServerInfo());
+  ipcMain.handle('tessera:sync-start', () => syncService.start());
+  ipcMain.handle('tessera:sync-stop', () => syncService.stop());
   ipcMain.handle('tessera:clear-browsing-data', async () => {
     try {
-      await session.defaultSession.clearCache();
-      await session.defaultSession.clearStorageData();
+      const sessionsToClear = [session.defaultSession];
+      const spaces = latestStateCache?.spaces || [];
+      for (const sp of spaces) {
+        sessionsToClear.push(session.fromPartition(`persist:${sp.id}`));
+      }
+      sessionsToClear.push(session.fromPartition('incognito_session'));
+
+      await Promise.all(
+        sessionsToClear.map(async (s) => {
+          try {
+            await s.clearCache();
+            await s.clearStorageData();
+          } catch {}
+        })
+      );
       return true;
     } catch {
       return false;
@@ -521,6 +591,7 @@ app.whenReady().then(() => {
 
   app.on('before-quit', () => {
     localBridge.stop();
+    syncService.stop();
   });
 });
 

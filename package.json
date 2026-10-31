@@ -17,6 +17,7 @@
     "release": "npm run build && electron-builder --win --publish always"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "electron-updater": "^6.8.11",
     "lucide-react": "^0.468.0",
     "qrcode": "^1.5.4",

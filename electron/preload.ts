@@ -3,9 +3,11 @@ import type {
   AiChatMessage,
   AiProviderId,
   DownloadItem,
+  HistoryEntry,
   LocalBridgeStatus,
   PersistedAppState,
-  SiteSettings
+  SiteSettings,
+  SpeedDialItem
 } from '../src/shared/types';
 import type { BlockedRequestPayload } from './privacyEngine';
 
@@ -17,6 +19,8 @@ export interface TesseraDesktopApi {
   windowIsMaximized: () => Promise<boolean>;
   loadState: () => Promise<PersistedAppState>;
   saveState: (state: PersistedAppState) => Promise<void>;
+  searchOmnibar: (query: string, limit?: number) => Promise<{ history: HistoryEntry[]; bookmarks: SpeedDialItem[] }>;
+  recordHistoryVisit: (entry: HistoryEntry) => Promise<void>;
   ensurePartition: (partitionName: string) => Promise<void>;
   clearIncognitoPartition: (partitionName: string) => Promise<void>;
   updatePrivacyConfig: (adBlockEnabled: boolean, siteSettings: Record<string, SiteSettings>) => Promise<void>;
@@ -53,11 +57,20 @@ export interface TesseraDesktopApi {
     conversationHistory: AiChatMessage[];
     userQuestion: string;
   }) => Promise<string>;
-  aiTranscribeAudio: (base64Audio: string, mimeType: string) => Promise<string>;
+  aiTranscribeAudio: (base64Audio: string, mimeType: string, isWakeWordCheck?: boolean) => Promise<string>;
   bridgeStart: () => Promise<LocalBridgeStatus>;
   bridgeStop: () => Promise<LocalBridgeStatus>;
   bridgeGetStatus: () => Promise<LocalBridgeStatus>;
   bridgeUpdateContext: (info: { url: string; title: string }) => void;
+  syncGetInfo: () => Promise<{
+    deviceId: string;
+    deviceName: string;
+    port: number;
+    pairingSecret: string;
+    isRunning: boolean;
+  }>;
+  syncStart: (port?: number) => Promise<{ port: number; pairingSecret: string }>;
+  syncStop: () => Promise<void>;
   checkForUpdates: () => Promise<{ success: boolean; error?: string }>;
   quitAndInstallUpdate: () => Promise<void>;
   getUpdateStatus: () => Promise<{ status: string; version?: string; releaseNotes?: string; error?: string }>;
@@ -87,6 +100,8 @@ const api: TesseraDesktopApi = {
   windowIsMaximized: () => ipcRenderer.invoke('tessera:window-is-maximized'),
   loadState: () => ipcRenderer.invoke('tessera:load-state'),
   saveState: (state) => ipcRenderer.invoke('tessera:save-state', state),
+  searchOmnibar: (query, limit) => ipcRenderer.invoke('tessera:search-omnibar', query, limit),
+  recordHistoryVisit: (entry) => ipcRenderer.invoke('tessera:record-history-visit', entry),
   ensurePartition: (partitionName) => ipcRenderer.invoke('tessera:ensure-partition', partitionName),
   clearIncognitoPartition: (partitionName) => ipcRenderer.invoke('tessera:clear-incognito-partition', partitionName),
   updatePrivacyConfig: (adBlockEnabled, siteSettings) =>
@@ -109,12 +124,15 @@ const api: TesseraDesktopApi = {
   aiSetApiKey: (provider, key) => ipcRenderer.invoke('tessera:ai-set-key', provider, key),
   aiGenerateSummary: (params) => ipcRenderer.invoke('tessera:ai-summary', params),
   aiAskQuestion: (params) => ipcRenderer.invoke('tessera:ai-ask', params),
-  aiTranscribeAudio: (base64Audio, mimeType) =>
-    ipcRenderer.invoke('tessera:ai-transcribe-audio', base64Audio, mimeType),
+  aiTranscribeAudio: (base64Audio, mimeType, isWakeWordCheck) =>
+    ipcRenderer.invoke('tessera:ai-transcribe-audio', base64Audio, mimeType, isWakeWordCheck),
   bridgeStart: () => ipcRenderer.invoke('tessera:bridge-start'),
   bridgeStop: () => ipcRenderer.invoke('tessera:bridge-stop'),
   bridgeGetStatus: () => ipcRenderer.invoke('tessera:bridge-status'),
   bridgeUpdateContext: (info) => ipcRenderer.send('tessera:bridge-context', info),
+  syncGetInfo: () => ipcRenderer.invoke('tessera:sync-info'),
+  syncStart: (port) => ipcRenderer.invoke('tessera:sync-start', port),
+  syncStop: () => ipcRenderer.invoke('tessera:sync-stop'),
   checkForUpdates: () => ipcRenderer.invoke('tessera:check-for-updates'),
   quitAndInstallUpdate: () => ipcRenderer.invoke('tessera:quit-and-install-update'),
   getUpdateStatus: () => ipcRenderer.invoke('tessera:get-update-status'),

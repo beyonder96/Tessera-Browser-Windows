@@ -297,7 +297,11 @@ export class TesseraAiService {
     throw new Error(lastError);
   }
 
-  async transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
+  async transcribeAudio(
+    audioBuffer: Buffer,
+    mimeType: string,
+    isWakeWordCheck = false
+  ): Promise<string> {
     const groqKey = this.getApiKey('GROQ');
     const geminiKey = this.getApiKey('GEMINI');
 
@@ -310,7 +314,7 @@ export class TesseraAiService {
     // 1. Try Groq Whisper (ultra-fast ~150ms transcription)
     if (groqKey) {
       try {
-        const text = await this.executeGroqWhisper(groqKey, audioBuffer, mimeType);
+        const text = await this.executeGroqWhisper(groqKey, audioBuffer, mimeType, isWakeWordCheck);
         if (text) return text;
       } catch (err: any) {
         console.warn('[TesseraAiService] Groq Whisper failed:', err?.message || err);
@@ -337,7 +341,8 @@ export class TesseraAiService {
   private async executeGroqWhisper(
     apiKey: string,
     audioBuffer: Buffer,
-    mimeType: string
+    mimeType: string,
+    isWakeWordCheck = false
   ): Promise<string> {
     const cleanMime = (mimeType || 'audio/webm').split(';')[0];
     const ext = cleanMime.includes('webm')
@@ -358,7 +363,9 @@ export class TesseraAiService {
     formData.append('response_format', 'json');
     formData.append(
       'prompt',
-      'Comandos de voz: pesquisar, resumir, nova guia, abrir site, modo leitor, modo escuro, ler página, Tessera.'
+      isWakeWordCheck
+        ? 'Transcrição em português brasileiro.'
+        : 'Comandos de voz: pesquisar, resumir, nova guia, abrir site, modo leitor, modo escuro, ler página, Tessera.'
     );
 
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {

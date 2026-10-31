@@ -35,7 +35,11 @@ export interface LocalBridgeCallbacks {
   getActivePageInfo: () => { url: string; title: string };
   getBackupJson: () => string;
   onReceiveUrlFromPhone: (url: string) => void;
-  onReceiveBackupFromPhone: (rawJson: string) => { importedBookmarks: number; importedHistory: number; importedSpaces: number };
+  onReceiveBackupFromPhone: (
+    rawJson: string
+  ) =>
+    | { importedBookmarks: number; importedHistory: number; importedSpaces: number }
+    | Promise<{ importedBookmarks: number; importedHistory: number; importedSpaces: number }>;
   onStatusChanged: (status: LocalBridgeStatus) => void;
 }
 
@@ -139,9 +143,9 @@ export class LocalBridgeServer {
             body += chunk;
             if (body.length > 15_000_000) req.destroy();
           });
-          req.on('end', () => {
+          req.on('end', async () => {
             try {
-              const stats = this.callbacks.onReceiveBackupFromPhone(body);
+              const stats = await this.callbacks.onReceiveBackupFromPhone(body);
               this.lastReceivedMessage = `Backup Android sincronizado! (${stats.importedBookmarks} favoritos, ${stats.importedHistory} itens de histórico)`;
               this.callbacks.onStatusChanged(this.getStatus());
               res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

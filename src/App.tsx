@@ -36,6 +36,7 @@ import { podcastAudioService } from './services/podcastAudioService';
 import { WindowChromeOverlay } from './components/WindowChromeOverlay';
 import { TesseraStartPage } from './components/TesseraStartPage';
 import { WebViewStage, type WebViewStageHandle } from './components/WebViewStage';
+import { WebContextMenu, type WebContextMenuData } from './components/WebContextMenu';
 import { TesseraAirBar } from './components/TesseraAirBar';
 import { TesseraReaderScreen } from './components/TesseraReaderScreen';
 import { TesseraAiSheet } from './components/TesseraAiSheet';
@@ -181,6 +182,10 @@ export const App: React.FC = () => {
     connectedClients: 0,
     lastReceivedMessage: null
   });
+
+  // Desktop Usability: Web Context Menu & HTML5 Fullscreen state
+  const [contextMenuData, setContextMenuData] = useState<WebContextMenuData | null>(null);
+  const [isHtmlFullScreen, setIsHtmlFullScreen] = useState(false);
 
   // Hydrate initial persisted state from Electron Main Process
   useEffect(() => {
@@ -791,6 +796,30 @@ export const App: React.FC = () => {
             void webStageRef.current?.triggerPictureInPicture(activeTab.id);
           }
           break;
+        case 'zoom-in': {
+          const currentZoom = webStageRef.current?.getZoomFactor() ?? 1.0;
+          const nextZoom = Math.min(2.5, Math.round((currentZoom + 0.1) * 10) / 10);
+          webStageRef.current?.setZoomFactor(nextZoom);
+          break;
+        }
+        case 'zoom-out': {
+          const currentZoom = webStageRef.current?.getZoomFactor() ?? 1.0;
+          const nextZoom = Math.max(0.4, Math.round((currentZoom - 0.1) * 10) / 10);
+          webStageRef.current?.setZoomFactor(nextZoom);
+          break;
+        }
+        case 'zoom-reset': {
+          webStageRef.current?.setZoomFactor(1.0);
+          break;
+        }
+        case 'print': {
+          webStageRef.current?.printActiveTab();
+          break;
+        }
+        case 'toggle-fullscreen': {
+          setIsHtmlFullScreen((prev) => !prev);
+          break;
+        }
         case 'voice-activate':
           voiceActivationService.activateManualListening();
           break;
@@ -876,7 +905,7 @@ export const App: React.FC = () => {
       } else if (ctrl && e.shiftKey && key === 'x') {
         e.preventDefault();
         executeShortcutAction('pip-toggle');
-      } else if ((ctrl && e.shiftKey && key === 'v') || (e.altKey && key === 'v')) {
+      } else if ((ctrl && e.altKey && key === 'v') || (e.altKey && key === 'm')) {
         e.preventDefault();
         executeShortcutAction('voice-activate');
       } else if (e.altKey && e.key === 'ArrowLeft') {
@@ -985,16 +1014,18 @@ export const App: React.FC = () => {
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative', overflow: 'hidden' }}>
       {/* Frameless Window Drag Strip + Discreet Windows Controls + Download Visual Banner */}
-      <WindowChromeOverlay
-        isHomePage={activeTab.isHomePage}
-        isIncognito={isIncognitoMode}
-        activeDownloadBanner={activeDownloadBanner}
-        onDismissDownloadBanner={() => setActiveDownloadBanner(null)}
-        onOpenDownloadsHub={() => {
-          setActiveDownloadBanner(null);
-          setHubModalState({ open: true, tab: 2 });
-        }}
-      />
+      {!isHtmlFullScreen && (
+        <WindowChromeOverlay
+          isHomePage={activeTab.isHomePage}
+          isIncognito={isIncognitoMode}
+          activeDownloadBanner={activeDownloadBanner}
+          onDismissDownloadBanner={() => setActiveDownloadBanner(null)}
+          onOpenDownloadsHub={() => {
+            setActiveDownloadBanner(null);
+            setHubModalState({ open: true, tab: 2 });
+          }}
+        />
+      )}
 
       {/* Main Content Stage: Start Page vs Chromium WebView Pool */}
       <div style={{ width: '100%', height: '100%', display: activeTab.isHomePage ? 'block' : 'none' }}>
@@ -1047,12 +1078,11 @@ export const App: React.FC = () => {
           onUpdateTab={updateTab}
           onRecordHistory={(title, url, spaceId, isIncog) => {
             if (isIncog || !url.startsWith('http')) return;
+            const entry = { id: crypto.randomUUID(), title, url, timestamp: Date.now(), spaceId };
+            void window.tesseraApi?.recordHistoryVisit?.(entry);
             setHistory((prev) => {
               if (prev[0]?.url === url) return prev;
-              return [
-                { id: crypto.randomUUID(), title, url, timestamp: Date.now(), spaceId },
-                ...prev
-              ].slice(0, 1000);
+              return [entry, ...prev.filter((p) => p.url !== url)];
             });
           }}
           onScrollDirection={(down) => {
@@ -1081,6 +1111,8 @@ export const App: React.FC = () => {
           }
           onFindMatchesUpdated={(active, total) => setFindMatchInfo({ active, total })}
           onOpenNewTab={(url) => openNewTab(null, url)}
+          onShowContextMenu={setContextMenuData}
+          onHtmlFullScreenChange={setIsHtmlFullScreen}
         />
       </div>
 
@@ -1133,66 +1165,68 @@ export const App: React.FC = () => {
       )}
 
       {/* Floating Tessera AirBar Dock */}
-      <TesseraAirBar
-        settings={settings}
-        activeTab={activeTab}
-        visibleTabs={visibleTabs}
-        activeSpace={activeSpace}
-        groups={tabGroups}
-        isIncognito={isIncognitoMode}
-        isBookmarked={isBookmarked}
-        isReaderAvailable={isReaderAvailable}
-        isReaderActive={Boolean(readerArticle)}
-        isAutoHidden={isAirBarAutoHidden}
-        externalEditTrigger={airBarEditTrigger}
-        searchSuggestions={searchSuggestions}
-        favorites={favorites}
-        onRevealBar={() => setIsAirBarAutoHidden(false)}
-        onQueryChange={(q) => {
-          fetchSearchSuggestions(q, settings.searchEngine)
-            .then(setSearchSuggestions)
-            .catch(() => setSearchSuggestions([]));
-        }}
-        onNavigate={navigateActiveTab}
-        onBack={() => {
-          if (activeTab.canGoBack) {
-            webStageRef.current?.goBack();
-          } else if (!activeTab.isHomePage) {
-            updateTab(activeTab.id, { isHomePage: true, title: 'Início' });
-          }
-        }}
-        onForward={() => webStageRef.current?.goForward()}
-        onReload={() => webStageRef.current?.reload()}
-        onStopLoading={() => webStageRef.current?.stop()}
-        onGoHome={() => updateTab(activeTab.id, { isHomePage: true, title: 'Início' })}
-        onToggleBookmark={toggleBookmark}
-        onToggleReaderMode={() => void toggleReaderMode()}
-        onOpenAi={() => void openAiAssistant(false)}
-        onOpenTabsModal={async () => {
-          if (!activeTab.isHomePage) {
-            const thumb = await webStageRef.current?.captureActiveThumbnail();
-            if (thumb) updateTab(activeTab.id, { thumbnailDataUrl: thumb });
-          }
-          setShowTabsModal(true);
-        }}
-        onOpenSpacesModal={() => setShowSpacesModal(true)}
-        onOpenSiteSettings={() => setShowSiteSettingsModal(true)}
-        onOpenQuickSettings={() => setShowQuickSettings(true)}
-        onSelectTab={setActiveTabId}
-        onCloseTab={closeTab}
-        onNewTab={() => openNewTab()}
-        onGroupTabs={groupTabsTogether}
-        onRenameGroup={renameTabGroup}
-        onChangeGroupColor={changeTabGroupColor}
-        onUngroupTab={ungroupTab}
-        onCloseGroup={closeTabGroup}
-        onDuplicateTab={duplicateTab}
-        onTogglePinTab={(id) => setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, isPinned: !t.isPinned } : t)))}
-        onTogglePlayPause={(tabId) => void webStageRef.current?.toggleMediaPlayPause(tabId)}
-        onToggleMute={(tabId) => webStageRef.current?.toggleMediaMute(tabId)}
-        onTriggerPiP={(tabId) => void webStageRef.current?.triggerPictureInPicture(tabId)}
-        onOpenVoiceAssistant={() => voiceActivationService.activateManualListening()}
-      />
+      {!isHtmlFullScreen && (
+        <TesseraAirBar
+          settings={settings}
+          activeTab={activeTab}
+          visibleTabs={visibleTabs}
+          activeSpace={activeSpace}
+          groups={tabGroups}
+          isIncognito={isIncognitoMode}
+          isBookmarked={isBookmarked}
+          isReaderAvailable={isReaderAvailable}
+          isReaderActive={Boolean(readerArticle)}
+          isAutoHidden={isAirBarAutoHidden}
+          externalEditTrigger={airBarEditTrigger}
+          searchSuggestions={searchSuggestions}
+          favorites={favorites}
+          onRevealBar={() => setIsAirBarAutoHidden(false)}
+          onQueryChange={(q) => {
+            fetchSearchSuggestions(q, settings.searchEngine)
+              .then(setSearchSuggestions)
+              .catch(() => setSearchSuggestions([]));
+          }}
+          onNavigate={navigateActiveTab}
+          onBack={() => {
+            if (activeTab.canGoBack) {
+              webStageRef.current?.goBack();
+            } else if (!activeTab.isHomePage) {
+              updateTab(activeTab.id, { isHomePage: true, title: 'Início' });
+            }
+          }}
+          onForward={() => webStageRef.current?.goForward()}
+          onReload={() => webStageRef.current?.reload()}
+          onStopLoading={() => webStageRef.current?.stop()}
+          onGoHome={() => updateTab(activeTab.id, { isHomePage: true, title: 'Início' })}
+          onToggleBookmark={toggleBookmark}
+          onToggleReaderMode={() => void toggleReaderMode()}
+          onOpenAi={() => void openAiAssistant(false)}
+          onOpenTabsModal={async () => {
+            if (!activeTab.isHomePage) {
+              const thumb = await webStageRef.current?.captureActiveThumbnail();
+              if (thumb) updateTab(activeTab.id, { thumbnailDataUrl: thumb });
+            }
+            setShowTabsModal(true);
+          }}
+          onOpenSpacesModal={() => setShowSpacesModal(true)}
+          onOpenSiteSettings={() => setShowSiteSettingsModal(true)}
+          onOpenQuickSettings={() => setShowQuickSettings(true)}
+          onSelectTab={setActiveTabId}
+          onCloseTab={closeTab}
+          onNewTab={() => openNewTab()}
+          onGroupTabs={groupTabsTogether}
+          onRenameGroup={renameTabGroup}
+          onChangeGroupColor={changeTabGroupColor}
+          onUngroupTab={ungroupTab}
+          onCloseGroup={closeTabGroup}
+          onDuplicateTab={duplicateTab}
+          onTogglePinTab={(id) => setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, isPinned: !t.isPinned } : t)))}
+          onTogglePlayPause={(tabId) => void webStageRef.current?.toggleMediaPlayPause(tabId)}
+          onToggleMute={(tabId) => webStageRef.current?.toggleMediaMute(tabId)}
+          onTriggerPiP={(tabId) => void webStageRef.current?.triggerPictureInPicture(tabId)}
+          onOpenVoiceAssistant={() => voiceActivationService.activateManualListening()}
+        />
+      )}
 
       {/* Podcastify Floating Mini Capsule & Full Player */}
       <PodcastPlayer audioState={podcastState} airBarPosition={settings.airBarPosition} />
@@ -1511,6 +1545,48 @@ export const App: React.FC = () => {
           voiceActivationService.executeManualCommand(cmd);
         }}
       />
+
+      {/* Editorial Web Page Right-Click Context Menu */}
+      {contextMenuData && (
+        <WebContextMenu
+          data={contextMenuData}
+          onClose={() => setContextMenuData(null)}
+          onOpenNewTab={(url) => openNewTab(null, url)}
+          onOpenIncognitoTab={(url) => {
+            const incogTab = {
+              id: crypto.randomUUID(),
+              url,
+              title: 'Carregando...',
+              isHomePage: false,
+              canGoBack: false,
+              canGoForward: false,
+              isPinned: false,
+              isIncognito: true,
+              lastAccessedTimestamp: Date.now(),
+              groupId: null,
+              spaceId: activeSpaceId
+            };
+            setTabs((prev) => [...prev, incogTab]);
+            setActiveTabId(incogTab.id);
+          }}
+          onPeekLink={(url, title) => setPeekTarget({ url, title })}
+          onSendTabToMobile={(url, title) => {
+            // Send tab to connected bridge client
+            window.tesseraApi?.bridgeUpdateContext?.({ url, title });
+          }}
+          onAskAi={(text) => {
+            void openAiAssistant(false, `Explique de forma clara este trecho:\n"${text}"`);
+          }}
+          onTranslatePage={() => void webStageRef.current?.translateActivePage()}
+          onToggleReaderMode={() => void toggleReaderMode()}
+          onPrintPage={() => webStageRef.current?.printActiveTab()}
+          onInspectElement={(tabId, x, y) => webStageRef.current?.inspectElement(x, y, tabId)}
+          onReloadTab={() => webStageRef.current?.reload()}
+          onGoBack={() => webStageRef.current?.goBack()}
+          onGoForward={() => webStageRef.current?.goForward()}
+          onExecuteEditCommand={(tabId, cmd) => webStageRef.current?.executeEditCommand(cmd, tabId)}
+        />
+      )}
     </div>
   );
 };
