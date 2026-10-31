@@ -33,11 +33,15 @@ Escolha uma das opções abaixo para baixar e começar a usar o **Tessera Browse
 <p align="center">
   <br>
   <a href="https://github.com/beyonder96/Tessera-Browser-Windows/releases/download/v1.0.0/Tessera-Browser-Setup-1.0.0.exe">
-    <img src="https://img.shields.io/badge/⬇️_Instalar_Agora-Tessera_Browser_Setup_(x64)-0078D4?style=for-the-badge&logo=windows&logoColor=white" height="46" alt="Baixar Instalador Oficial (.exe)" />
+    <img src="https://img.shields.io/badge/⬇️_Instalar_Agora-Tessera_Browser_Setup_(x64)-0078D4?style=for-the-badge&logo=windows&logoColor=white" height="48" alt="Baixar Instalador Oficial (.exe)" />
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://github.com/beyonder96/Tessera-Browser-Windows/releases/download/v1.0.0/Tessera-Browser-Portable-1.0.0.exe">
-    <img src="https://img.shields.io/badge/⚡_Executar_Portátil-Tessera_Portable_(x64)-107C41?style=for-the-badge&logo=windows&logoColor=white" height="46" alt="Baixar Versão Portátil (.exe)" />
+    <img src="https://img.shields.io/badge/⚡_Executar_Portátil-Tessera_Portable_(x64)-107C41?style=for-the-badge&logo=windows&logoColor=white" height="48" alt="Baixar Versão Portátil (.exe)" />
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/beyonder96/Tessera-Browser-Windows/releases/latest">
+    <img src="https://img.shields.io/badge/📦_Todas_as_Releases-GitHub-24292F?style=for-the-badge&logo=github&logoColor=white" height="48" alt="Página de Releases" />
   </a>
   <br><br>
 </p>
@@ -50,7 +54,7 @@ Escolha uma das opções abaixo para baixar e começar a usar o **Tessera Browse
 | **Executável Portátil** | [`Tessera-Browser-Portable-1.0.0.exe`](https://github.com/beyonder96/Tessera-Browser-Windows/releases/download/v1.0.0/Tessera-Browser-Portable-1.0.0.exe) | Windows 10/11 64-bit | ~85 MB | Não requer instalação nem privilégios de administrador. Pronto para rodar diretamente ou levar em um pendrive. |
 
 > [!TIP]
-> Você também pode acompanhar todas as notas de atualização na [Página de Releases](https://github.com/beyonder96/Tessera-Browser-Windows/releases).
+> **Instalação Rápida no Windows:** Ao baixar o instalador ou portátil pela primeira vez, caso o *Windows SmartScreen* exiba a mensagem de aplicativo não reconhecido, basta clicar em **"Mais informações"** e em seguida em **"Executar assim mesmo"**.
 
 ---
 
