@@ -14,7 +14,11 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['electron']
+              external: [
+                'electron',
+                '@libsql/client',
+                '@libsql/win32-x64-msvc'
+              ]
             }
           }
         }
