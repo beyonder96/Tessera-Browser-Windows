@@ -29,7 +29,9 @@ import {
   Folder,
   FolderPlus,
   Mic,
-  ExternalLink
+  ExternalLink,
+  Code,
+  Copy
 } from 'lucide-react';
 import type {
   BrowserSettings,
@@ -1059,6 +1061,9 @@ export const FullSettingsModal: React.FC<{
   onClose
 }) => {
   const [pinDraft, setPinDraft] = useState('');
+  const [showDevOptions, setShowDevOptions] = useState(false);
+  const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
+  const [cacheCleared, setCacheCleared] = useState(false);
 
   if (!visible) return null;
 
@@ -1243,6 +1248,241 @@ export const FullSettingsModal: React.FC<{
               <span>Sincronizar via Wi-Fi QR</span>
             </button>
           </div>
+        </div>
+
+        {/* Sobre o Tessera Browser com Novo Logotipo */}
+        <div style={{ ...sectionBoxStyle, display: 'flex', alignItems: 'center', gap: 14 }}>
+          <img
+            src="./assets/icon.png"
+            alt="Tessera Browser Logo"
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 14,
+              objectFit: 'contain',
+              flexShrink: 0
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>Tessera Browser for Windows</div>
+              <span
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: 999,
+                  background: 'var(--accent-primary)',
+                  color: '#FFFFFF'
+                }}
+              >
+                v1.0.1
+              </span>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2 }}>
+              Edição Desktop • Motor Chromium com AdBlock nativo & Spaces isolados
+            </div>
+            <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
+              Desenvolvido pelo Tessera Ecosystem • Código aberto sob licença MIT
+            </div>
+          </div>
+        </div>
+
+        {/* Developer Options Card (Tessera Android Style) */}
+        <div style={sectionBoxStyle}>
+          <div
+            onClick={() => setShowDevOptions(!showDevOptions)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              cursor: 'pointer',
+              userSelect: 'none'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                  background: 'rgba(10, 132, 255, 0.15)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#0A84FF'
+                }}
+              >
+                <Code size={16} />
+              </div>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>Opções do Desenvolvedor</div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                  {showDevOptions
+                    ? 'Ocultar painel de engenharia'
+                    : 'Avatar do autor, métricas do motor e flags experimentais'}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              style={{
+                ...secondaryPillBtn,
+                padding: '4px 12px',
+                fontSize: 11.5
+              }}
+            >
+              {showDevOptions ? 'Recolher' : 'Abrir'}
+            </button>
+          </div>
+
+          {showDevOptions && (
+            <div
+              style={{
+                marginTop: 16,
+                paddingTop: 16,
+                borderTop: '1px solid var(--border-hairline)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 14
+              }}
+            >
+              {/* Developer Avatar Floating Showcase */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 16,
+                  padding: 14,
+                  borderRadius: 16,
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-hairline)'
+                }}
+              >
+                <div
+                  style={{
+                    position: 'relative',
+                    width: 64,
+                    height: 64,
+                    flexShrink: 0
+                  }}
+                >
+                  <img
+                    src="./assets/ic_developer_avatar.png"
+                    alt="Developer Avatar"
+                    style={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: '50%',
+                      border: '2px solid var(--border-hairline)',
+                      boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+                      objectFit: 'cover'
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      bottom: 0,
+                      right: 0,
+                      width: 18,
+                      height: 18,
+                      borderRadius: '50%',
+                      background: '#34C759',
+                      border: '2px solid var(--bg-surface)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#FFF',
+                      fontSize: 10
+                    }}
+                  >
+                    ✓
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>Sobre o Desenvolvedor</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2 }}>
+                    Criado com foco em privacidade radical, design editorial e desempenho nativo no Windows.
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                    Arquiteto: <b>Kennedy Oliveira (beyonder96)</b> • Tessera Ecosystem
+                  </div>
+                </div>
+              </div>
+
+              {/* Technical System Specs */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: 8,
+                  fontSize: 11.5
+                }}
+              >
+                <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--bg-elevated)' }}>
+                  <span style={{ color: 'var(--text-tertiary)' }}>Motor Chromium:</span>{' '}
+                  <b>132.0.6834.196</b>
+                </div>
+                <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--bg-elevated)' }}>
+                  <span style={{ color: 'var(--text-tertiary)' }}>Electron Runtime:</span>{' '}
+                  <b>v34.2.0</b>
+                </div>
+                <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--bg-elevated)' }}>
+                  <span style={{ color: 'var(--text-tertiary)' }}>Node.js:</span>{' '}
+                  <b>v22.14.0</b>
+                </div>
+                <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--bg-elevated)' }}>
+                  <span style={{ color: 'var(--text-tertiary)' }}>Arquitetura:</span>{' '}
+                  <b>Windows x64</b>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const diag = `=== TESSERA BROWSER DIAGNOSTICS ===\nApp: Tessera Browser v1.0.1 (Windows x64)\nElectron: 34.2.0\nChromium: 132.0.6834.196\nNode: 22.14.0\nTheme: ${settings.isDarkMode ? 'Dark' : 'Light'}\nAdBlock: ${settings.adBlockEnabled}\nSearch: ${settings.searchEngine}\nTimestamp: ${new Date().toISOString()}`;
+                    navigator.clipboard.writeText(diag);
+                    setCopiedDiagnostics(true);
+                    setTimeout(() => setCopiedDiagnostics(false), 2000);
+                  }}
+                  style={{ ...secondaryPillBtn, fontSize: 11.5 }}
+                >
+                  <Copy size={13} />
+                  <span>{copiedDiagnostics ? 'Diagnóstico Copiado!' : 'Copiar Diagnóstico'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.tesseraApi?.clearBrowsingData) {
+                      window.tesseraApi.clearBrowsingData();
+                    }
+                    setCacheCleared(true);
+                    setTimeout(() => setCacheCleared(false), 2000);
+                  }}
+                  style={{ ...secondaryPillBtn, fontSize: 11.5 }}
+                >
+                  <Trash2 size={13} />
+                  <span>{cacheCleared ? 'Caches Limpos!' : 'Limpar Caches & Cookies'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.tesseraApi?.openExternalUrl) {
+                      window.tesseraApi.openExternalUrl('https://github.com/beyonder96/Tessera-Browser-Windows');
+                    }
+                  }}
+                  style={{ ...secondaryPillBtn, fontSize: 11.5 }}
+                >
+                  <ExternalLink size={13} />
+                  <span>Repositório GitHub</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

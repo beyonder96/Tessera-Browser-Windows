@@ -28,6 +28,17 @@ export interface TabGroup {
   spaceId: string;
 }
 
+export const GROUP_PALETTE = [
+  '#0A84FF',
+  '#30D158',
+  '#FF9F0A',
+  '#FF375F',
+  '#BF5AF2',
+  '#64D2FF',
+  '#FFD60A',
+  '#AC8E68'
+] as const;
+
 export interface BrowserTab {
   id: string;
   url: string;

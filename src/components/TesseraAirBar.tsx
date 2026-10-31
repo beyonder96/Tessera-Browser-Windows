@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,14 +17,21 @@ import {
   ArrowUpRight,
   Pin,
   Mic,
-  Volume2
+  Volume2,
+  Edit3,
+  Palette,
+  Copy,
+  Trash2,
+  FolderMinus,
+  Check
 } from 'lucide-react';
-import type {
-  BrowserSettings,
-  BrowserSpace,
-  BrowserTab,
-  SpeedDialItem,
-  TabGroup
+import {
+  type BrowserSettings,
+  type BrowserSpace,
+  type BrowserTab,
+  type SpeedDialItem,
+  type TabGroup,
+  GROUP_PALETTE
 } from '../shared/types';
 import { extractCleanHost } from '../shared/searchEngines';
 import { TabHoverPreview } from './TabHoverPreview';
@@ -61,6 +69,12 @@ interface TesseraAirBarProps {
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
   onGroupTabs?: (sourceTabId: string, targetTabId: string) => void;
+  onRenameGroup?: (groupId: string, newName: string) => void;
+  onChangeGroupColor?: (groupId: string, colorHex: string) => void;
+  onUngroupTab?: (tabId: string) => void;
+  onCloseGroup?: (groupId: string) => void;
+  onDuplicateTab?: (tabId: string) => void;
+  onTogglePinTab?: (tabId: string) => void;
   onTogglePlayPause?: (tabId: string) => void;
   onToggleMute?: (tabId: string) => void;
   onTriggerPiP?: (tabId: string) => void;
@@ -100,6 +114,12 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
   onCloseTab,
   onNewTab,
   onGroupTabs,
+  onRenameGroup,
+  onChangeGroupColor,
+  onUngroupTab,
+  onCloseGroup,
+  onDuplicateTab,
+  onTogglePinTab,
   onTogglePlayPause,
   onToggleMute,
   onTriggerPiP,
@@ -108,6 +128,13 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [inputText, setInputText] = useState('');
   const [hoveredTabInfo, setHoveredTabInfo] = useState<{ tab: BrowserTab; rect: DOMRect } | null>(null);
+  const [tabContextMenu, setTabContextMenu] = useState<{
+    tab: BrowserTab;
+    x: number;
+    y: number;
+    isRenaming?: boolean;
+    renameText?: string;
+  } | null>(null);
   const [draggedAirTabId, setDraggedAirTabId] = useState<string | null>(null);
   const [dragOverAirTabId, setDragOverAirTabId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -370,6 +397,18 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
                     setDragOverAirTabId(null);
                   }}
                   onClick={() => onSelectTab(tab.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const currentGroup = (groups || []).find((g) => g.id === tab.groupId);
+                    setTabContextMenu({
+                      tab,
+                      x: e.clientX,
+                      y: e.clientY,
+                      isRenaming: false,
+                      renameText: currentGroup?.name || ''
+                    });
+                  }}
                   onMouseEnter={(e) => {
                     const target = e.currentTarget;
                     if (hoverTabTimerRef.current) clearTimeout(hoverTabTimerRef.current);
@@ -416,6 +455,28 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
                     transition: 'transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease'
                   }}
                 >
+                  {isDragTarget && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: -22,
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        background: 'var(--accent-primary)',
+                        color: '#FFFFFF',
+                        fontSize: 9.5,
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: 999,
+                        whiteSpace: 'nowrap',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                        pointerEvents: 'none',
+                        zIndex: 20
+                      }}
+                    >
+                      Solte para agrupar
+                    </div>
+                  )}
                   {tabGroup && (
                     <span
                       title={`Grupo: ${tabGroup.name}`}
@@ -515,49 +576,327 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
           </div>
         )}
 
-        {/* Floating Tab Hover Preview Card (Rendered outside overflowX: auto so it never gets clipped!) */}
-        {hoveredTabInfo && (
-          <div
-            style={{
-              position: 'fixed',
-              left: Math.max(
-                130,
-                Math.min(window.innerWidth - 130, hoveredTabInfo.rect.left + hoveredTabInfo.rect.width / 2)
-              ),
-              [isBottom ? 'bottom' : 'top']: isBottom
-                ? window.innerHeight - hoveredTabInfo.rect.top + 8
-                : hoveredTabInfo.rect.bottom + 8,
-              transform: 'translateX(-50%)',
-              zIndex: 99999,
-              pointerEvents: 'auto'
-            }}
-            onMouseEnter={() => {
-              if (hoverTabTimerRef.current) clearTimeout(hoverTabTimerRef.current);
-            }}
-            onMouseLeave={() => {
-              if (hoverTabTimerRef.current) clearTimeout(hoverTabTimerRef.current);
-              hoverTabTimerRef.current = window.setTimeout(() => {
-                setHoveredTabInfo(null);
-              }, 120);
-            }}
-          >
-            <TabHoverPreview
-              tab={hoveredTabInfo.tab}
-              spaceColorHex={isIncognito ? '#AF52DE' : activeSpace.colorHex}
-              onSelectTab={(id) => {
-                setHoveredTabInfo(null);
-                onSelectTab(id);
+        {/* Floating Tab Hover Preview Card (Portal to document.body so transform doesn't distort fixed coords) */}
+        {hoveredTabInfo &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div
+              style={{
+                position: 'fixed',
+                left: Math.max(
+                  135,
+                  Math.min(
+                    window.innerWidth - 135,
+                    hoveredTabInfo.rect.left + hoveredTabInfo.rect.width / 2
+                  )
+                ),
+                top: isBottom
+                  ? hoveredTabInfo.rect.top - 10
+                  : hoveredTabInfo.rect.bottom + 10,
+                transform: isBottom ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+                zIndex: 99999,
+                pointerEvents: 'auto'
               }}
-              onCloseTab={(id) => {
-                setHoveredTabInfo(null);
-                onCloseTab(id);
+              onMouseEnter={() => {
+                if (hoverTabTimerRef.current) clearTimeout(hoverTabTimerRef.current);
               }}
-              onTogglePlayPause={onTogglePlayPause || (() => {})}
-              onToggleMute={onToggleMute || (() => {})}
-              onTriggerPiP={onTriggerPiP || (() => {})}
-            />
-          </div>
-        )}
+              onMouseLeave={() => {
+                if (hoverTabTimerRef.current) clearTimeout(hoverTabTimerRef.current);
+                hoverTabTimerRef.current = window.setTimeout(() => {
+                  setHoveredTabInfo(null);
+                }, 120);
+              }}
+            >
+              <TabHoverPreview
+                tab={hoveredTabInfo.tab}
+                spaceColorHex={isIncognito ? '#AF52DE' : activeSpace.colorHex}
+                onSelectTab={(id) => {
+                  setHoveredTabInfo(null);
+                  onSelectTab(id);
+                }}
+                onCloseTab={(id) => {
+                  setHoveredTabInfo(null);
+                  onCloseTab(id);
+                }}
+                onTogglePlayPause={onTogglePlayPause || (() => {})}
+                onToggleMute={onToggleMute || (() => {})}
+                onTriggerPiP={onTriggerPiP || (() => {})}
+              />
+            </div>,
+            document.body
+          )}
+
+        {/* Tab & Group Right-Click Context Menu Portal */}
+        {tabContextMenu &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <>
+              <div
+                onClick={() => setTabContextMenu(null)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setTabContextMenu(null);
+                }}
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  zIndex: 999998,
+                  background: 'transparent'
+                }}
+              />
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: 'fixed',
+                  left: Math.max(12, Math.min(window.innerWidth - 225, tabContextMenu.x)),
+                  top: Math.max(12, Math.min(window.innerHeight - 310, tabContextMenu.y)),
+                  width: 215,
+                  background: 'var(--bg-elevated)',
+                  backdropFilter: 'blur(28px) saturate(180%)',
+                  WebkitBackdropFilter: 'blur(28px) saturate(180%)',
+                  border: '1px solid var(--border-hairline)',
+                  borderRadius: 14,
+                  boxShadow: 'var(--shadow-floating)',
+                  padding: 6,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 3,
+                  zIndex: 999999,
+                  color: 'var(--text-primary)',
+                  fontSize: 12,
+                  animation: 'fadeInDown 0.14s cubic-bezier(0.16, 1, 0.3, 1)'
+                }}
+              >
+                {(() => {
+                  const targetGroup = tabContextMenu.tab.groupId
+                    ? (groups || []).find((g) => g.id === tabContextMenu.tab.groupId)
+                    : null;
+
+                  const menuItemBtn: React.CSSProperties = {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 8px',
+                    borderRadius: 8,
+                    fontSize: 11.5,
+                    color: 'var(--text-primary)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    width: '100%',
+                    transition: 'background 0.1s ease'
+                  };
+
+                  return (
+                    <>
+                      {targetGroup && (
+                        <>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '5px 8px',
+                              borderRadius: 8,
+                              background: 'var(--bg-surface)'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                              <span
+                                style={{
+                                  width: 8,
+                                  height: 8,
+                                  borderRadius: '50%',
+                                  backgroundColor: targetGroup.colorHex,
+                                  flexShrink: 0
+                                }}
+                              />
+                              <span
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  color: targetGroup.colorHex,
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis'
+                                }}
+                              >
+                                {targetGroup.name}
+                              </span>
+                            </div>
+                          </div>
+
+                          {tabContextMenu.isRenaming ? (
+                            <form
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                const val = tabContextMenu.renameText?.trim();
+                                if (val && onRenameGroup) {
+                                  onRenameGroup(targetGroup.id, val);
+                                }
+                                setTabContextMenu(null);
+                              }}
+                              style={{ display: 'flex', gap: 4, padding: '2px 4px' }}
+                            >
+                              <input
+                                autoFocus
+                                type="text"
+                                value={tabContextMenu.renameText || ''}
+                                onChange={(e) =>
+                                  setTabContextMenu((prev) =>
+                                    prev ? { ...prev, renameText: e.target.value } : null
+                                  )
+                                }
+                                style={{
+                                  flex: 1,
+                                  background: 'var(--bg-surface)',
+                                  border: '1px solid var(--border-hairline)',
+                                  borderRadius: 6,
+                                  color: 'var(--text-primary)',
+                                  padding: '3px 6px',
+                                  fontSize: 11,
+                                  outline: 'none'
+                                }}
+                              />
+                              <button
+                                type="submit"
+                                style={{
+                                  padding: '3px 8px',
+                                  borderRadius: 6,
+                                  background: 'var(--accent-primary)',
+                                  color: '#FFF',
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  border: 'none',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                OK
+                              </button>
+                            </form>
+                          ) : (
+                            <button
+                              onClick={() =>
+                                setTabContextMenu((prev) =>
+                                  prev ? { ...prev, isRenaming: true } : null
+                                )
+                              }
+                              style={menuItemBtn}
+                              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-surface)')}
+                              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                            >
+                              <Edit3 size={13} style={{ color: 'var(--text-tertiary)' }} />
+                              <span>Renomear grupo</span>
+                            </button>
+                          )}
+
+                          {/* Color Palette row */}
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '4px 6px'
+                            }}
+                          >
+                            {GROUP_PALETTE.map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                title={`Mudar para cor ${c}`}
+                                onClick={() => {
+                                  onChangeGroupColor?.(targetGroup.id, c);
+                                  setTabContextMenu(null);
+                                }}
+                                style={{
+                                  width: 16,
+                                  height: 16,
+                                  borderRadius: '50%',
+                                  backgroundColor: c,
+                                  border: targetGroup.colorHex === c ? '2px solid #FFF' : '1px solid rgba(0,0,0,0.2)',
+                                  cursor: 'pointer',
+                                  boxShadow: targetGroup.colorHex === c ? `0 0 6px ${c}` : 'none'
+                                }}
+                              />
+                            ))}
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              onUngroupTab?.(tabContextMenu.tab.id);
+                              setTabContextMenu(null);
+                            }}
+                            style={menuItemBtn}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-surface)')}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                          >
+                            <FolderMinus size={13} style={{ color: 'var(--text-tertiary)' }} />
+                            <span>Desagrupar esta guia</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              onCloseGroup?.(targetGroup.id);
+                              setTabContextMenu(null);
+                            }}
+                            style={{ ...menuItemBtn, color: '#FF453A' }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 69, 58, 0.12)')}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                          >
+                            <Trash2 size={13} style={{ color: '#FF453A' }} />
+                            <span>Fechar grupo</span>
+                          </button>
+
+                          <div style={{ height: 1, background: 'var(--border-hairline)', margin: '3px 0' }} />
+                        </>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          onDuplicateTab?.(tabContextMenu.tab.id);
+                          setTabContextMenu(null);
+                        }}
+                        style={menuItemBtn}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-surface)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <Copy size={13} style={{ color: 'var(--text-tertiary)' }} />
+                        <span>Duplicar guia</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          onTogglePinTab?.(tabContextMenu.tab.id);
+                          setTabContextMenu(null);
+                        }}
+                        style={menuItemBtn}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-surface)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <Pin size={13} style={{ color: 'var(--text-tertiary)' }} />
+                        <span>{tabContextMenu.tab.isPinned ? 'Desafixar guia' : 'Fixar guia'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          onCloseTab(tabContextMenu.tab.id);
+                          setTabContextMenu(null);
+                        }}
+                        style={{ ...menuItemBtn, color: '#FF453A' }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 69, 58, 0.12)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <X size={13} style={{ color: '#FF453A' }} />
+                        <span>Fechar guia (Ctrl+W)</span>
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+            </>,
+            document.body
+          )}
 
         {/* MAIN FLOATING MORPHING CAPSULE DOCK (TesseraAirBar.kt) */}
         <div

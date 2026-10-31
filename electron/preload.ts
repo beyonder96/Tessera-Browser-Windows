@@ -35,6 +35,8 @@ export interface TesseraDesktopApi {
   } | null>;
   openDownloadedFile: (savePath: string) => void;
   showDownloadedInFolder: (savePath: string) => void;
+  clearBrowsingData: () => Promise<boolean>;
+  openExternalUrl: (url: string) => Promise<void>;
   aiGetKeyStatus: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean }>;
   aiSetApiKey: (provider: AiProviderId, key: string) => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean }>;
   aiGenerateSummary: (params: {
@@ -101,6 +103,8 @@ const api: TesseraDesktopApi = {
   importBackupFromFile: (currentState) => ipcRenderer.invoke('tessera:import-backup', currentState),
   openDownloadedFile: (savePath) => ipcRenderer.send('tessera:open-downloaded-file', savePath),
   showDownloadedInFolder: (savePath) => ipcRenderer.send('tessera:show-downloaded-folder', savePath),
+  clearBrowsingData: () => ipcRenderer.invoke('tessera:clear-browsing-data'),
+  openExternalUrl: (url) => ipcRenderer.invoke('tessera:open-external-url', url),
   aiGetKeyStatus: () => ipcRenderer.invoke('tessera:ai-key-status'),
   aiSetApiKey: (provider, key) => ipcRenderer.invoke('tessera:ai-set-key', provider, key),
   aiGenerateSummary: (params) => ipcRenderer.invoke('tessera:ai-summary', params),

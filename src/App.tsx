@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type {
+import {
   AiProviderId,
   BlockedTrackerItem,
   BrowserSettings,
   BrowserSpace,
   BrowserTab,
   DownloadItem,
+  GROUP_PALETTE,
   LocalBridgeStatus,
   PersistedAppState,
   PodcastAudioState,
@@ -467,17 +468,14 @@ export const App: React.FC = () => {
 
   const closeTab = useCallback(
     (tabId: string) => {
-      setTabs((prev) => {
-        const target = prev.find((t) => t.id === tabId);
-        if (!target || target.isPinned) return prev;
-        if (!target.isIncognito && !target.isHomePage) {
-          setClosedTabsStack((st) => [target, ...st].slice(0, 15));
-        }
-        const remaining = prev.filter((t) => t.id !== tabId);
-        return remaining;
-      });
+      const target = tabs.find((t) => t.id === tabId);
+      if (!target || target.isPinned) return;
+      if (!target.isIncognito && !target.isHomePage) {
+        setClosedTabsStack((st) => [target, ...st].slice(0, 15));
+      }
+      setTabs((prev) => prev.filter((t) => t.id !== tabId));
     },
-    []
+    [tabs]
   );
 
   const groupTabsTogether = useCallback(
@@ -486,17 +484,6 @@ export const App: React.FC = () => {
       const source = tabs.find((t) => t.id === sourceTabId);
       const target = tabs.find((t) => t.id === targetTabId);
       if (!source || !target) return;
-
-      const GROUP_PALETTE = [
-        '#3B82F6',
-        '#10B981',
-        '#F59E0B',
-        '#EF4444',
-        '#8B5CF6',
-        '#EC4899',
-        '#06B6D4',
-        '#14B8A6'
-      ];
 
       if (target.groupId) {
         // Target is already in a group -> add source to target's group
@@ -511,12 +498,8 @@ export const App: React.FC = () => {
       } else {
         // Neither is in a group -> create a new group containing both!
         const newGroupId = crypto.randomUUID();
-        const baseTitle = target.isHomePage
-          ? source.isHomePage
-            ? 'Coleção'
-            : extractCleanHost(source.url) || source.title || 'Novo Grupo'
-          : extractCleanHost(target.url) || target.title || 'Novo Grupo';
-        const cleanName = baseTitle.length > 18 ? `${baseTitle.slice(0, 18)}...` : baseTitle;
+        const countInSpace = tabGroups.filter((g) => g.spaceId === activeSpaceId).length + 1;
+        const cleanName = `Grupo ${countInSpace}`;
         const color =
           GROUP_PALETTE[
             tabGroups.filter((g) => g.spaceId === activeSpaceId).length % GROUP_PALETTE.length
@@ -536,16 +519,52 @@ export const App: React.FC = () => {
     [tabs, tabGroups, activeSpaceId]
   );
 
+  const duplicateTab = useCallback(
+    (tabId: string) => {
+      const target = tabs.find((t) => t.id === tabId);
+      if (!target) return;
+      const duplicated: BrowserTab = {
+        ...target,
+        id: crypto.randomUUID(),
+        title: target.title ? `${target.title}` : 'Nova Guia'
+      };
+      setTabs((prev) => [...prev, duplicated]);
+      setActiveTabId(duplicated.id);
+    },
+    [tabs]
+  );
+
+  const renameTabGroup = useCallback((groupId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    setTabGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, name: trimmed } : g))
+    );
+  }, []);
+
+  const changeTabGroupColor = useCallback((groupId: string, colorHex: string) => {
+    setTabGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, colorHex } : g))
+    );
+  }, []);
+
+  const ungroupTab = useCallback((tabId: string) => {
+    setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, groupId: null } : t)));
+  }, []);
+
+  const closeTabGroup = useCallback((groupId: string) => {
+    setTabs((prev) => prev.filter((t) => t.groupId !== groupId));
+    setTabGroups((prev) => prev.filter((g) => g.id !== groupId));
+  }, []);
+
   const reopenClosedTab = useCallback(() => {
-    setClosedTabsStack((prev) => {
-      if (prev.length === 0) return prev;
-      const [restored, ...rest] = prev;
-      const reopened = { ...restored, id: crypto.randomUUID(), spaceId: activeSpaceId };
-      setTabs((t) => [...t, reopened]);
-      setActiveTabId(reopened.id);
-      return rest;
-    });
-  }, [activeSpaceId]);
+    if (closedTabsStack.length === 0) return;
+    const [restored, ...rest] = closedTabsStack;
+    setClosedTabsStack(rest);
+    const reopened = { ...restored, id: crypto.randomUUID(), spaceId: activeSpaceId };
+    setTabs((t) => [...t, reopened]);
+    setActiveTabId(reopened.id);
+  }, [closedTabsStack, activeSpaceId]);
 
   const toggleIncognitoMode = useCallback(() => {
     setIsIncognitoMode((prev) => {
@@ -1163,6 +1182,12 @@ export const App: React.FC = () => {
         onCloseTab={closeTab}
         onNewTab={() => openNewTab()}
         onGroupTabs={groupTabsTogether}
+        onRenameGroup={renameTabGroup}
+        onChangeGroupColor={changeTabGroupColor}
+        onUngroupTab={ungroupTab}
+        onCloseGroup={closeTabGroup}
+        onDuplicateTab={duplicateTab}
+        onTogglePinTab={(id) => setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, isPinned: !t.isPinned } : t)))}
         onTogglePlayPause={(tabId) => void webStageRef.current?.toggleMediaPlayPause(tabId)}
         onToggleMute={(tabId) => webStageRef.current?.toggleMediaMute(tabId)}
         onTriggerPiP={(tabId) => void webStageRef.current?.triggerPictureInPicture(tabId)}

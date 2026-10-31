@@ -116,6 +116,19 @@ app.whenReady().then(() => {
   });
 
   const registeredShortcutWebContents = new Set<number>();
+  let lastDispatchedShortcut = { action: '', time: 0 };
+
+  function dispatchShortcut(action: string) {
+    const now = Date.now();
+    if (lastDispatchedShortcut.action === action && now - lastDispatchedShortcut.time < 300) {
+      return;
+    }
+    lastDispatchedShortcut = { action, time: now };
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('tessera:shortcut', action);
+    }
+  }
+
   function registerShortcutInterceptor(wc: Electron.WebContents) {
     if (registeredShortcutWebContents.has(wc.id)) return;
     registeredShortcutWebContents.add(wc.id);
@@ -128,55 +141,55 @@ app.whenReady().then(() => {
 
       if (isCtrl && !input.shift && !input.alt && key === 't') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'new-tab');
+        dispatchShortcut('new-tab');
       } else if (isCtrl && input.shift && !input.alt && key === 't') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'reopen-tab');
+        dispatchShortcut('reopen-tab');
       } else if (isCtrl && !input.shift && !input.alt && key === 'w') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'close-tab');
+        dispatchShortcut('close-tab');
       } else if ((isCtrl && !input.shift && key === 'l') || (input.alt && key === 'd')) {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'focus-address-bar');
+        dispatchShortcut('focus-address-bar');
       } else if (isCtrl && !input.shift && key === 'f') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'find-in-page');
+        dispatchShortcut('find-in-page');
       } else if (isCtrl && key === 'tab') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', input.shift ? 'prev-tab' : 'next-tab');
+        dispatchShortcut(input.shift ? 'prev-tab' : 'next-tab');
       } else if (isCtrl && !input.shift && !input.alt && /^[1-9]$/.test(key)) {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', `switch-tab-${key}`);
+        dispatchShortcut(`switch-tab-${key}`);
       } else if ((isCtrl && key === 'r') || input.key === 'F5') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'reload');
+        dispatchShortcut('reload');
       } else if (input.key === 'F12' || (isCtrl && input.shift && key === 'i')) {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'devtools');
+        dispatchShortcut('devtools');
       } else if (input.alt && key === 'r') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'reader-mode');
+        dispatchShortcut('reader-mode');
       } else if (input.alt && key === 'a') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'ai-assistant');
+        dispatchShortcut('ai-assistant');
       } else if (isCtrl && !input.shift && key === 'h') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'history');
+        dispatchShortcut('history');
       } else if (isCtrl && !input.shift && key === 'j') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'downloads');
+        dispatchShortcut('downloads');
       } else if (isCtrl && !input.shift && key === 'd') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'bookmark');
+        dispatchShortcut('bookmark');
       } else if (isCtrl && input.shift && (key === 'n' || key === 'p')) {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'new-incognito-tab');
+        dispatchShortcut('new-incognito-tab');
       } else if (isCtrl && input.shift && key === 'x') {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'pip-toggle');
+        dispatchShortcut('pip-toggle');
       } else if ((isCtrl && input.shift && key === 'v') || (input.alt && key === 'v')) {
         event.preventDefault();
-        mainWindow.webContents.send('tessera:shortcut', 'voice-activate');
+        dispatchShortcut('voice-activate');
       }
     });
   }
@@ -488,6 +501,20 @@ app.whenReady().then(() => {
   ipcMain.handle('tessera:bridge-start', () => localBridge.start());
   ipcMain.handle('tessera:bridge-stop', () => localBridge.stop());
   ipcMain.handle('tessera:bridge-status', () => localBridge.getStatus());
+  ipcMain.handle('tessera:clear-browsing-data', async () => {
+    try {
+      await session.defaultSession.clearCache();
+      await session.defaultSession.clearStorageData();
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  ipcMain.handle('tessera:open-external-url', async (_e, targetUrl: string) => {
+    if (typeof targetUrl === 'string' && (targetUrl.startsWith('https://') || targetUrl.startsWith('http://'))) {
+      await shell.openExternal(targetUrl);
+    }
+  });
   ipcMain.on('tessera:bridge-context', (_e, info: { url: string; title: string }) => {
     activeBridgePageInfo = info;
   });

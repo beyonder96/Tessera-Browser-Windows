@@ -231,11 +231,10 @@ export class TesseraAiService {
     messages: AiChatMessage[]
   ): Promise<string> {
     const modelsToTry = [
-      'gemini-1.5-flash',
-      'gemini-2.0-flash',
-      'gemini-2.0-flash-exp',
-      'gemini-1.5-flash-8b',
-      'gemini-1.5-pro'
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash'
     ];
     let lastError = 'Modelo Gemini indisponível.';
 
@@ -411,7 +410,12 @@ export class TesseraAiService {
   ): Promise<string> {
     const cleanMime = (mimeType || 'audio/webm').split(';')[0];
     const base64Data = audioBuffer.toString('base64');
-    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-exp'];
+    const modelsToTry = [
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash'
+    ];
 
     let lastErr = 'Gemini Audio indisponível.';
 

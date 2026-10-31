@@ -31,11 +31,11 @@ export const TabHoverPreview: React.FC<TabHoverPreviewProps> = ({
         position: 'relative',
         width: 240,
         borderRadius: 16,
-        background: 'rgba(26, 26, 30, 0.92)',
-        backdropFilter: 'blur(24px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-        border: '1px solid rgba(255, 255, 255, 0.14)',
-        boxShadow: '0 16px 36px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0,0,0,0.3)',
+        background: 'var(--bg-elevated)',
+        backdropFilter: 'blur(28px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(28px) saturate(180%)',
+        border: '1px solid var(--border-hairline)',
+        boxShadow: 'var(--shadow-floating)',
         padding: 10,
         display: 'flex',
         flexDirection: 'column',
@@ -90,9 +90,9 @@ export const TabHoverPreview: React.FC<TabHoverPreviewProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: 'rgba(255, 255, 255, 0.08)',
+            background: 'var(--bg-surface)',
             color: 'var(--text-tertiary)',
-            border: 'none',
+            border: '1px solid var(--border-hairline)',
             cursor: 'pointer'
           }}
         >
@@ -107,8 +107,8 @@ export const TabHoverPreview: React.FC<TabHoverPreviewProps> = ({
           height: 120,
           borderRadius: 10,
           overflow: 'hidden',
-          background: 'rgba(0, 0, 0, 0.5)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-hairline)',
           position: 'relative',
           display: 'flex',
           alignItems: 'center',
@@ -146,7 +146,7 @@ export const TabHoverPreview: React.FC<TabHoverPreviewProps> = ({
               position: 'absolute',
               top: 6,
               right: 6,
-              background: 'rgba(0, 0, 0, 0.75)',
+              background: 'var(--bg-elevated)',
               backdropFilter: 'blur(8px)',
               padding: '3px 7px',
               borderRadius: 999,
@@ -156,7 +156,7 @@ export const TabHoverPreview: React.FC<TabHoverPreviewProps> = ({
               fontSize: 10,
               fontWeight: 600,
               color: '#34C759',
-              border: '1px solid rgba(52, 199, 89, 0.3)'
+              border: '1px solid rgba(52, 199, 89, 0.4)'
             }}
           >
             <span className="live-pulse-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: '#34C759' }} />
@@ -187,7 +187,7 @@ export const TabHoverPreview: React.FC<TabHoverPreviewProps> = ({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+          borderTop: '1px solid var(--border-hairline)',
           paddingTop: 6,
           marginTop: 2
         }}
@@ -201,8 +201,8 @@ export const TabHoverPreview: React.FC<TabHoverPreviewProps> = ({
               width: 28,
               height: 28,
               borderRadius: 8,
-              background: 'rgba(255, 255, 255, 0.1)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-hairline)',
               color: tab.isPlayingMedia ? '#34C759' : 'var(--text-primary)',
               display: 'flex',
               alignItems: 'center',
@@ -220,8 +220,8 @@ export const TabHoverPreview: React.FC<TabHoverPreviewProps> = ({
               width: 28,
               height: 28,
               borderRadius: 8,
-              background: 'rgba(255, 255, 255, 0.1)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-hairline)',
               color: tab.isMuted ? '#FF453A' : 'var(--text-primary)',
               display: 'flex',
               alignItems: 'center',
