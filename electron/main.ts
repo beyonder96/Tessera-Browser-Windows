@@ -22,6 +22,7 @@ import { DownloadController } from './downloadManager';
 import { LocalBridgeServer } from './localBridgeServer';
 import { TesseraSyncService } from './sync/tesseraSyncService';
 import { UpdateService } from './updateService';
+import { BrowserImportService } from './browserImportService';
 import type { HistoryEntry, PersistedAppState, SiteSettings } from '../src/shared/types';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -594,6 +595,46 @@ app.whenReady().then(async () => {
       return false;
     }
   });
+  ipcMain.handle('tessera:check-onboarding-needed', async () => {
+    return !(await storageService.getSqliteDatabase().getOnboardingStatus());
+  });
+
+  ipcMain.handle('tessera:complete-onboarding', async () => {
+    await storageService.getSqliteDatabase().setOnboardingCompleted(true);
+    return true;
+  });
+
+  ipcMain.handle('tessera:get-installed-browsers', () => {
+    return BrowserImportService.getInstalledBrowsers();
+  });
+
+  ipcMain.handle('tessera:import-browser-bookmarks', async (_e, browserId: 'chrome' | 'edge') => {
+    const localAppData = process.env.LOCALAPPDATA || '';
+    const dir =
+      browserId === 'edge'
+        ? path.join(localAppData, 'Microsoft', 'Edge', 'User Data', 'Default')
+        : path.join(localAppData, 'Google', 'Chrome', 'User Data', 'Default');
+
+    const bookmarks = BrowserImportService.extractChromeBookmarks(dir);
+    if (bookmarks.length === 0) return { count: 0 };
+
+    const spaceId = latestStateCache?.activeSpaceId || 'space_general';
+    for (const bm of bookmarks) {
+      await storageService.getSqliteDatabase().insertBookmark({
+        id: `bm_imported_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        title: bm.title,
+        url: bm.url,
+        spaceId,
+        badgeColorHex: '#4285F4'
+      });
+    }
+    return { count: bookmarks.length };
+  });
+
+  ipcMain.handle('tessera:get-google-account-status', async () => {
+    return BrowserImportService.checkGoogleSession(session.defaultSession);
+  });
+
   ipcMain.handle('tessera:open-external-url', async (_e, targetUrl: string) => {
     if (typeof targetUrl === 'string' && (targetUrl.startsWith('https://') || targetUrl.startsWith('http://'))) {
       await shell.openExternal(targetUrl);

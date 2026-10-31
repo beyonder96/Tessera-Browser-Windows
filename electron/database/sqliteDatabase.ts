@@ -203,9 +203,17 @@ export class SqliteDatabase {
         active_space_id TEXT NOT NULL,
         active_tab_id TEXT NOT NULL,
         settings_json TEXT NOT NULL,
+        has_completed_onboarding INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       );
     `);
+
+    // Ensure has_completed_onboarding column exists if upgrading existing table
+    try {
+      await this.client.execute('ALTER TABLE app_state ADD COLUMN has_completed_onboarding INTEGER NOT NULL DEFAULT 0;');
+    } catch {
+      // Column already exists
+    }
 
     // Paired Devices for Tessera Sync
     await this.client.execute(`
@@ -295,6 +303,32 @@ export class SqliteDatabase {
     const historyRes = await this.client.execute('SELECT COUNT(*) as count FROM history;');
     const historyCount = Number(historyRes.rows[0]?.count ?? 0);
     return spacesCount === 0 && historyCount === 0;
+  }
+
+  async getOnboardingStatus(): Promise<boolean> {
+    await this.init();
+    try {
+      const res = await this.client.execute('SELECT has_completed_onboarding FROM app_state WHERE id = 1;');
+      if (res.rows.length > 0) {
+        return Boolean(res.rows[0].has_completed_onboarding);
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+
+  async setOnboardingCompleted(completed: boolean = true): Promise<void> {
+    await this.init();
+    const now = Date.now();
+    await this.client.execute({
+      sql: `INSERT INTO app_state (id, active_space_id, active_tab_id, settings_json, has_completed_onboarding, updated_at)
+            VALUES (1, 'space_general', 'default-tab', '{}', ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              has_completed_onboarding = excluded.has_completed_onboarding,
+              updated_at = excluded.updated_at;`,
+      args: [completed ? 1 : 0, now]
+    });
   }
 
   async loadFullState(): Promise<PersistedAppState | null> {
@@ -525,8 +559,8 @@ export class SqliteDatabase {
 
     // 1. App State
     batchStatements.push({
-      sql: `INSERT INTO app_state (id, active_space_id, active_tab_id, settings_json, updated_at)
-            VALUES (1, ?, ?, ?, ?)
+      sql: `INSERT INTO app_state (id, active_space_id, active_tab_id, settings_json, has_completed_onboarding, updated_at)
+            VALUES (1, ?, ?, ?, 1, ?)
             ON CONFLICT(id) DO UPDATE SET
               active_space_id = excluded.active_space_id,
               active_tab_id = excluded.active_tab_id,
@@ -700,6 +734,26 @@ export class SqliteDatabase {
       const chunk = batchStatements.slice(i, i + chunkSize);
       await this.client.batch(chunk, 'write');
     }
+  }
+
+  async insertBookmark(bookmark: SpeedDialItem): Promise<void> {
+    await this.init();
+    const now = Date.now();
+    await this.client.execute({
+      sql: `INSERT OR REPLACE INTO bookmarks (
+        id, title, url, icon_asset, badge_color_hex, badge_color_argb, space_id, sort_order, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 999, ?);`,
+      args: [
+        bookmark.id,
+        bookmark.title,
+        bookmark.url,
+        bookmark.iconAsset || null,
+        bookmark.badgeColorHex || '#4285F4',
+        bookmark.badgeColor ?? 0xff4285f4,
+        bookmark.spaceId || null,
+        now
+      ]
+    });
   }
 
   async recordHistoryVisit(entry: HistoryEntry): Promise<void> {

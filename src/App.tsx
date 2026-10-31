@@ -57,6 +57,7 @@ import {
   SpacesModal,
   TabsModal
 } from './components/BrowserModals';
+import { OnboardingModal } from './components/OnboardingModal';
 import { VoiceAssistantOverlay } from './components/VoiceAssistantOverlay';
 import { voiceActivationService, type VoiceIntent } from './services/voiceActivationService';
 
@@ -155,6 +156,7 @@ export const App: React.FC = () => {
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [showSiteSettingsModal, setShowSiteSettingsModal] = useState(false);
   const [showQrBridgeModal, setShowQrBridgeModal] = useState(false);
+  const [showOnboardingModal, setShowOnboardingModal] = useState(false);
   const [peekTarget, setPeekTarget] = useState<{ url: string; title: string } | null>(null);
   const [activeDownloadBanner, setActiveDownloadBanner] = useState<DownloadItem | null>(null);
   const [voiceState, setVoiceState] = useState(voiceActivationService.getState());
@@ -201,9 +203,10 @@ export const App: React.FC = () => {
       window.tesseraApi.getWebviewPreloadPath(),
       window.tesseraApi.loadState(),
       window.tesseraApi.aiGetKeyStatus(),
-      window.tesseraApi.isDefaultBrowser()
+      window.tesseraApi.isDefaultBrowser(),
+      window.tesseraApi.checkOnboardingNeeded?.().catch(() => false)
     ])
-      .then(([preloadUrl, loaded, keyStatus, defBrowser]) => {
+      .then(([preloadUrl, loaded, keyStatus, defBrowser, needsOnboarding]) => {
         setWebviewPreloadUrl(preloadUrl);
         setSpaces(loaded.spaces);
         setActiveSpaceId(loaded.activeSpaceId);
@@ -231,6 +234,9 @@ export const App: React.FC = () => {
           hasGroqKey: keyStatus.hasGroqKey
         }));
         setIsDefaultBrowser(defBrowser);
+        if (needsOnboarding) {
+          setShowOnboardingModal(true);
+        }
         setIsHydrated(true);
       })
       .catch(() => {
@@ -1501,6 +1507,7 @@ export const App: React.FC = () => {
           }
         }}
         onOpenQrBridge={() => setShowQrBridgeModal(true)}
+        onOpenOnboarding={() => setShowOnboardingModal(true)}
         onClose={() => setShowFullSettings(false)}
       />
 
@@ -1587,6 +1594,25 @@ export const App: React.FC = () => {
           onExecuteEditCommand={(tabId, cmd) => webStageRef.current?.executeEditCommand(cmd, tabId)}
         />
       )}
+
+      {/* Welcome Onboarding Wizard */}
+      <OnboardingModal
+        visible={showOnboardingModal}
+        settings={settings}
+        onUpdateSettings={(partial) => setSettings((prev) => ({ ...prev, ...partial }))}
+        onOpenTab={(url) => {
+          openNewTab(null, url);
+        }}
+        onComplete={() => {
+          setShowOnboardingModal(false);
+          // Refresh favorites/state after potential browser bookmarks import
+          window.tesseraApi?.loadState?.().then((loaded) => {
+            if (loaded?.speedDialItems) {
+              setFavorites(loaded.speedDialItems);
+            }
+          }).catch(() => {});
+        }}
+      />
     </div>
   );
 };

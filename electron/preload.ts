@@ -73,6 +73,21 @@ export interface TesseraDesktopApi {
   syncStop: () => Promise<void>;
   syncSendTabToMobile: (url: string, title?: string) => Promise<boolean>;
   syncGetConnectedMobile: () => Promise<{ deviceName: string; platform: string; lastSeen: number; ip?: string } | null>;
+  checkOnboardingNeeded: () => Promise<boolean>;
+  completeOnboarding: () => Promise<boolean>;
+  getInstalledBrowsers: () => Promise<
+    Array<{
+      id: 'chrome' | 'edge';
+      name: string;
+      isInstalled: boolean;
+      profileName?: string;
+      email?: string;
+      avatarUrl?: string;
+      bookmarkCount: number;
+    }>
+  >;
+  importBrowserBookmarks: (browserId: 'chrome' | 'edge') => Promise<{ count: number }>;
+  getGoogleAccountStatus: () => Promise<{ isAuthenticated: boolean; email?: string }>;
   checkForUpdates: () => Promise<{ success: boolean; error?: string }>;
   quitAndInstallUpdate: () => Promise<void>;
   getUpdateStatus: () => Promise<{ status: string; version?: string; releaseNotes?: string; error?: string }>;
@@ -137,6 +152,11 @@ const api: TesseraDesktopApi = {
   syncStop: () => ipcRenderer.invoke('tessera:sync-stop'),
   syncSendTabToMobile: (url, title) => ipcRenderer.invoke('tessera:sync-send-tab-to-mobile', url, title),
   syncGetConnectedMobile: () => ipcRenderer.invoke('tessera:sync-connected-mobile'),
+  checkOnboardingNeeded: () => ipcRenderer.invoke('tessera:check-onboarding-needed'),
+  completeOnboarding: () => ipcRenderer.invoke('tessera:complete-onboarding'),
+  getInstalledBrowsers: () => ipcRenderer.invoke('tessera:get-installed-browsers'),
+  importBrowserBookmarks: (browserId) => ipcRenderer.invoke('tessera:import-browser-bookmarks', browserId),
+  getGoogleAccountStatus: () => ipcRenderer.invoke('tessera:get-google-account-status'),
   checkForUpdates: () => ipcRenderer.invoke('tessera:check-for-updates'),
   quitAndInstallUpdate: () => ipcRenderer.invoke('tessera:quit-and-install-update'),
   getUpdateStatus: () => ipcRenderer.invoke('tessera:get-update-status'),

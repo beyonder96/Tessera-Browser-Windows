@@ -1048,6 +1048,7 @@ export const FullSettingsModal: React.FC<{
   onExportBackup: () => void;
   onImportBackup: () => void;
   onOpenQrBridge: () => void;
+  onOpenOnboarding?: () => void;
   onClose: () => void;
 }> = ({
   visible,
@@ -1058,6 +1059,7 @@ export const FullSettingsModal: React.FC<{
   onExportBackup,
   onImportBackup,
   onOpenQrBridge,
+  onOpenOnboarding,
   onClose
 }) => {
   const [pinDraft, setPinDraft] = useState('');
@@ -1109,6 +1111,39 @@ export const FullSettingsModal: React.FC<{
             </button>
           )}
         </div>
+
+        {/* Onboarding Welcome Wizard Shortcut */}
+        {onOpenOnboarding && (
+          <div
+            style={{
+              ...sectionBoxStyle,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>Tour de Boas-Vindas & Vínculo Google</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                Reabrir o assistente inicial de importação de favoritos e personalização.
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                onClose();
+                onOpenOnboarding();
+              }}
+              style={{
+                ...primaryPillBtn,
+                background: 'rgba(255, 255, 255, 0.08)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-hairline)'
+              }}
+            >
+              Abrir Tour
+            </button>
+          </div>
+        )}
 
         {/* Search Engine Selector */}
         <div style={sectionBoxStyle}>
