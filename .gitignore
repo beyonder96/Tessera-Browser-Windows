@@ -4,3 +4,10 @@ dist-electron/
 release/
 *.log
 .DS_Store
+
+build/*-test.png
+build/sim-*.png
+build/comparison-*.png
+build/variation-*.png
+build/shadow-*.png
+*.cer
