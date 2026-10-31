@@ -71,6 +71,8 @@ export interface TesseraDesktopApi {
   }>;
   syncStart: (port?: number) => Promise<{ port: number; pairingSecret: string }>;
   syncStop: () => Promise<void>;
+  syncSendTabToMobile: (url: string, title?: string) => Promise<boolean>;
+  syncGetConnectedMobile: () => Promise<{ deviceName: string; platform: string; lastSeen: number; ip?: string } | null>;
   checkForUpdates: () => Promise<{ success: boolean; error?: string }>;
   quitAndInstallUpdate: () => Promise<void>;
   getUpdateStatus: () => Promise<{ status: string; version?: string; releaseNotes?: string; error?: string }>;
@@ -133,6 +135,8 @@ const api: TesseraDesktopApi = {
   syncGetInfo: () => ipcRenderer.invoke('tessera:sync-info'),
   syncStart: (port) => ipcRenderer.invoke('tessera:sync-start', port),
   syncStop: () => ipcRenderer.invoke('tessera:sync-stop'),
+  syncSendTabToMobile: (url, title) => ipcRenderer.invoke('tessera:sync-send-tab-to-mobile', url, title),
+  syncGetConnectedMobile: () => ipcRenderer.invoke('tessera:sync-connected-mobile'),
   checkForUpdates: () => ipcRenderer.invoke('tessera:check-for-updates'),
   quitAndInstallUpdate: () => ipcRenderer.invoke('tessera:quit-and-install-update'),
   getUpdateStatus: () => ipcRenderer.invoke('tessera:get-update-status'),

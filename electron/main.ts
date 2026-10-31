@@ -78,6 +78,14 @@ app.whenReady().then(async () => {
     },
     onDeviceConnected: (name) => {
       console.log('[TesseraSync] Dispositivo conectado via Wi-Fi:', name);
+    },
+    onMergeSyncPayload: async (rawJson) => {
+      const result = await storageService.mergeBackup(rawJson);
+      latestStateCache = result.nextState;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('tessera:bridge-state-imported', result);
+      }
+      return result;
     }
   });
 
@@ -558,6 +566,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('tessera:sync-info', () => syncService.getServerInfo());
   ipcMain.handle('tessera:sync-start', () => syncService.start());
   ipcMain.handle('tessera:sync-stop', () => syncService.stop());
+  ipcMain.handle('tessera:sync-send-tab-to-mobile', (_e, url: string, title?: string) => {
+    return syncService.enqueueTabForMobile(url, title);
+  });
+  ipcMain.handle('tessera:sync-connected-mobile', () => {
+    return syncService.getConnectedMobileDevice();
+  });
   ipcMain.handle('tessera:clear-browsing-data', async () => {
     try {
       const sessionsToClear = [session.defaultSession];

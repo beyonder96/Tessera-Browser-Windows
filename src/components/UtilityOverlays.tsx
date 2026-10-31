@@ -286,6 +286,7 @@ export const QrBridgeModal: React.FC<{
   const [mode, setMode] = useState<'bridge' | 'tab'>('bridge');
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
+  const [sentMessage, setSentMessage] = useState<string | null>(null);
 
   const targetQrString =
     mode === 'bridge' ? bridgeStatus.url || '' : currentUrl.startsWith('http') ? currentUrl : 'https://google.com';
@@ -489,6 +490,43 @@ export const QrBridgeModal: React.FC<{
               >
                 Iniciar Ponte
               </button>
+            )}
+          </div>
+        )}
+
+        {currentUrl.startsWith('http') && (
+          <div style={{ marginTop: 12 }}>
+            <button
+              onClick={async () => {
+                const ok = await window.tesseraApi?.syncSendTabToMobile(currentUrl, currentTitle);
+                if (ok) {
+                  setSentMessage('✓ Aba enviada para a caixa de entrada do Tessera Android!');
+                  setTimeout(() => setSentMessage(null), 3500);
+                }
+              }}
+              style={{
+                width: '100%',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-hairline)',
+                color: 'var(--text-primary)',
+                borderRadius: 12,
+                padding: '9px 12px',
+                fontSize: 12.5,
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                cursor: 'pointer'
+              }}
+            >
+              <Smartphone size={14} style={{ color: 'var(--accent-primary)' }} />
+              <span>Enviar Esta Aba para o Tessera Android</span>
+            </button>
+            {sentMessage && (
+              <div style={{ fontSize: 11.5, color: '#34C759', marginTop: 6, fontWeight: 600 }}>
+                {sentMessage}
+              </div>
             )}
           </div>
         )}

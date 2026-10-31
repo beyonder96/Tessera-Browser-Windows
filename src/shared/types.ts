@@ -67,6 +67,7 @@ export interface SpeedDialItem {
   iconAsset?: string;
   badgeColorHex: string;
   badgeColor?: number;
+  spaceId?: string | null;
 }
 
 export interface HistoryEntry {
@@ -295,6 +296,7 @@ export interface TesseraAndroidCompatibleBackup {
     title: string;
     url: string;
     badgeColor?: number;
+    spaceId?: string;
   }>;
   history: Array<{
     id: string;

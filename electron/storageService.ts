@@ -71,7 +71,8 @@ export function serializeToAndroidCompatibleBackup(state: PersistedAppState): Te
       id: item.id,
       title: item.title,
       url: item.url,
-      badgeColor: item.badgeColor ?? hexToArgb(item.badgeColorHex)
+      badgeColor: item.badgeColor ?? hexToArgb(item.badgeColorHex),
+      spaceId: item.spaceId ?? undefined
     })),
     history: state.history.map((h) => ({
       id: h.id,
@@ -142,7 +143,8 @@ export function mergeAndroidCompatibleBackup(
           url: b.url,
           iconAsset: matchedBrand?.[1],
           badgeColor: argb,
-          badgeColorHex: argbToHex(argb)
+          badgeColorHex: argbToHex(argb),
+          spaceId: b.spaceId || null
         });
         importedBookmarksCount++;
       }

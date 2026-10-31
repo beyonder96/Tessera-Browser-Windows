@@ -174,7 +174,7 @@ export class LocalBridgeServer {
     const addr = this.server.address();
     this.port = typeof addr === 'object' && addr ? addr.port : null;
     const ip = detectLocalLanIp();
-    this.url = `http://${ip}:${this.port}/?token=${this.token}`;
+    this.url = `http://${ip}:${this.port}/?token=${this.token}&syncPort=41828`;
 
     const status = this.getStatus();
     this.callbacks.onStatusChanged(status);

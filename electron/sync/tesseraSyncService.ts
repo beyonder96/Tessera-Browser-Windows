@@ -2,6 +2,7 @@ import http from 'node:http';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import type { BrowserTab, PersistedAppState } from '../../src/shared/types';
+import { createDefaultPersistedState } from '../storageService';
 import type { SqliteDatabase } from '../database/sqliteDatabase';
 import { LanDiscoveryBeacon } from './lanDiscovery';
 
@@ -10,6 +11,11 @@ export interface TesseraSyncOptions {
   getCurrentTabs: () => BrowserTab[];
   onOpenReceivedUrl: (url: string, title?: string) => void;
   onDeviceConnected?: (deviceName: string) => void;
+  onMergeSyncPayload?: (
+    rawJson: string
+  ) =>
+    | { nextState: PersistedAppState; importedBookmarks: number; importedHistory: number; importedSpaces: number }
+    | Promise<{ nextState: PersistedAppState; importedBookmarks: number; importedHistory: number; importedSpaces: number }>;
 }
 
 export interface PairedDeviceRecord {
@@ -29,6 +35,8 @@ export class TesseraSyncService {
   private readonly pairingSecret: string;
   private port = 41828;
   private isRunning = false;
+  private pendingMobileInbox: Array<{ id: string; url: string; title: string; timestamp: number }> = [];
+  private connectedMobileDevice: { deviceName: string; platform: string; lastSeen: number; ip?: string } | null = null;
 
   constructor(options: TesseraSyncOptions) {
     this.options = options;
@@ -36,6 +44,24 @@ export class TesseraSyncService {
     this.serverDeviceId = `win_${os.hostname().toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
     // Ephemeral pairing PIN/secret generated per session or until paired
     this.pairingSecret = crypto.randomBytes(16).toString('hex');
+  }
+
+  enqueueTabForMobile(url: string, title?: string): boolean {
+    if (!url || !url.startsWith('http')) return false;
+    this.pendingMobileInbox.push({
+      id: crypto.randomUUID(),
+      url,
+      title: title || url,
+      timestamp: Date.now()
+    });
+    if (this.pendingMobileInbox.length > 50) {
+      this.pendingMobileInbox.shift();
+    }
+    return true;
+  }
+
+  getConnectedMobileDevice() {
+    return this.connectedMobileDevice;
   }
 
   getServerInfo() {
@@ -81,7 +107,9 @@ export class TesseraSyncService {
                 deviceId: this.serverDeviceId,
                 deviceName: `${os.hostname()} (Tessera Windows)`,
                 platform: 'windows',
-                version: '2.0.0'
+                version: '2.0.0',
+                activeTabsCount: this.options.getCurrentTabs().length,
+                connectedMobile: this.connectedMobileDevice
               })
             );
             return;
@@ -106,6 +134,13 @@ export class TesseraSyncService {
             const deviceId = payload.deviceId || `android_${Date.now()}`;
             const deviceName = payload.deviceName || 'Tessera Android';
             const sharedSecret = crypto.randomBytes(32).toString('hex');
+
+            this.connectedMobileDevice = {
+              deviceName,
+              platform: payload.platform || 'android',
+              lastSeen: Date.now(),
+              ip: req.socket.remoteAddress || ''
+            };
 
             // Persist paired device in SQLite
             await this.sqliteDb.init();
@@ -134,6 +169,10 @@ export class TesseraSyncService {
               return;
             }
 
+            if (this.connectedMobileDevice) {
+              this.connectedMobileDevice.lastSeen = Date.now();
+            }
+
             this.options.onOpenReceivedUrl(payload.url, payload.title);
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -156,34 +195,57 @@ export class TesseraSyncService {
             return;
           }
 
-          // 5. Delta Sync
+          // 5. Mobile Inbox (abas enviadas do Windows para o Android)
+          if (pathname === '/api/v2/mobile-inbox' && req.method === 'GET') {
+            const tabs = [...this.pendingMobileInbox];
+            this.pendingMobileInbox = [];
+            if (this.connectedMobileDevice) {
+              this.connectedMobileDevice.lastSeen = Date.now();
+              this.connectedMobileDevice.ip = req.socket.remoteAddress || this.connectedMobileDevice.ip;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, tabs }));
+            return;
+          }
+
+          // 6. Delta Sync (Bidirecional)
           if (pathname === '/api/v2/sync/delta' && req.method === 'POST') {
             const body = await this.readRequestBody(req);
-            const deltaPayload = JSON.parse(body);
+            let mergeResult: {
+              nextState: PersistedAppState;
+              importedBookmarks: number;
+              importedHistory: number;
+              importedSpaces: number;
+            };
 
-            // Se vier backup completo ou deltas parciais:
-            const currentState = await this.sqliteDb.loadFullState();
-            if (currentState && deltaPayload) {
-              const mergeResult = await this.sqliteDb.mergeAndroidCompatibleBackup(deltaPayload, currentState);
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(
-                JSON.stringify({
-                  ok: true,
-                  serverTimestamp: Date.now(),
-                  importedBookmarks: mergeResult.importedBookmarks,
-                  importedHistory: mergeResult.importedHistory,
-                  importedSpaces: mergeResult.importedSpaces,
-                  latestState: {
-                    bookmarks: mergeResult.nextState.speedDialItems,
-                    spaces: mergeResult.nextState.spaces
-                  }
-                })
-              );
-              return;
+            if (this.options.onMergeSyncPayload) {
+              mergeResult = await this.options.onMergeSyncPayload(body);
+            } else {
+              const currentState = (await this.sqliteDb.loadFullState()) || createDefaultPersistedState();
+              const deltaPayload = JSON.parse(body);
+              mergeResult = await this.sqliteDb.mergeAndroidCompatibleBackup(deltaPayload, currentState);
+            }
+
+            if (this.connectedMobileDevice) {
+              this.connectedMobileDevice.lastSeen = Date.now();
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: true, serverTimestamp: Date.now() }));
+            res.end(
+              JSON.stringify({
+                ok: true,
+                serverTimestamp: Date.now(),
+                importedBookmarks: mergeResult.importedBookmarks,
+                importedHistory: mergeResult.importedHistory,
+                importedSpaces: mergeResult.importedSpaces,
+                latestState: {
+                  bookmarks: mergeResult.nextState.speedDialItems,
+                  history: mergeResult.nextState.history,
+                  spaces: mergeResult.nextState.spaces,
+                  settings: mergeResult.nextState.settings
+                }
+              })
+            );
             return;
           }
 

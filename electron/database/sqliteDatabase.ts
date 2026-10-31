@@ -849,7 +849,8 @@ export class SqliteDatabase {
             url: b.url,
             iconAsset: matchedBrand?.[1],
             badgeColor: argb,
-            badgeColorHex: argbToHex(argb)
+            badgeColorHex: argbToHex(argb),
+            spaceId: b.spaceId || null
           };
           mergedBookmarks.push(newBookmark);
           importedBookmarksCount++;
