@@ -1,0 +1,199 @@
+:root {
+  --font-sans: 'Segoe UI Variable Display', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+  --font-serif: 'Georgia', 'Cambria', 'Times New Roman', serif;
+  --font-mono: 'Cascadia Code', 'Consolas', monospace;
+
+  /* Apple iOS 18 Accents from TesseraTheme.kt */
+  --apple-blue: #007AFF;
+  --apple-blue-dark: #0A84FF;
+  --apple-indigo: #5856D6;
+  --apple-purple: #AF52DE;
+  --apple-pink: #FF2D55;
+  --apple-red: #FF3B30;
+  --apple-orange: #FF9500;
+  --apple-yellow: #FFCC00;
+  --apple-green: #34C759;
+  --apple-teal: #30B0C7;
+  --apple-cyan: #32ADE6;
+
+  /* Radii (AppleShapes) */
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-capsule: 26px;
+  --radius-full: 9999px;
+}
+
+/* Dark Mode — Pure OLED & Solid Elevation (TesseraTheme.kt) */
+[data-theme="dark"] {
+  --bg-canvas: #000000;
+  --bg-surface: #141416;
+  --bg-elevated: #1E1E22;
+  --bg-card: #18181C;
+  --bg-hover: #26262C;
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(235, 235, 245, 0.80);
+  --text-tertiary: rgba(235, 235, 245, 0.50);
+  --border-hairline: #2C2C32;
+  --accent-primary: #0A84FF;
+  --shadow-floating: 0 14px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.45);
+  --modal-backdrop: rgba(0, 0, 0, 0.72);
+}
+
+/* Light Mode — Editorial Newspaper Journal (TesseraTheme.kt) */
+[data-theme="light"] {
+  --bg-canvas: #F7F4EB;
+  --bg-surface: #EFECE2;
+  --bg-elevated: #E8E4D8;
+  --bg-card: #EFECE2;
+  --bg-hover: #E1DCCE;
+  --text-primary: #1C1917;
+  --text-secondary: #57534E;
+  --text-tertiary: #78716C;
+  --border-hairline: #DDD8CB;
+  --accent-primary: #007AFF;
+  --shadow-floating: 0 12px 32px rgba(28, 25, 23, 0.14), 0 2px 6px rgba(28, 25, 23, 0.08);
+  --modal-backdrop: rgba(28, 25, 23, 0.42);
+}
+
+/* Incognito Stealth Override */
+[data-incognito="true"] {
+  --bg-canvas: #0B0813;
+  --bg-surface: #161224;
+  --bg-elevated: #221A38;
+  --bg-card: #1B152C;
+  --bg-hover: #2C2248;
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(216, 180, 254, 0.82);
+  --text-tertiary: rgba(216, 180, 254, 0.52);
+  --border-hairline: rgba(191, 90, 242, 0.36);
+  --accent-primary: #AF52DE;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+html, body, #root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+input, textarea, .selectable-text {
+  user-select: text;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Custom sleek scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-hairline);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* Window Drag Zones */
+.app-drag-region {
+  -webkit-app-region: drag;
+}
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Smooth Morphing & Tactile Micro-interactions */
+.squircle-press {
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.16s ease, border-color 0.16s ease;
+}
+.squircle-press:active {
+  transform: scale(0.95);
+}
+
+.airbar-morph {
+  transition:
+    width 0.38s cubic-bezier(0.22, 1.12, 0.36, 1),
+    transform 0.32s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.24s ease,
+    background-color 0.25s ease;
+}
+
+@keyframes fadeScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.modal-animate-in {
+  animation: fadeScaleIn 0.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+
+.pulse-subtle {
+  animation: pulseGlow 1.6s ease-in-out infinite;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes equalizerWave {
+  0% {
+    height: 4px;
+  }
+  100% {
+    height: 20px;
+  }
+}
+
+.live-pulse-dot {
+  animation: pulseGlow 1.2s ease-in-out infinite;
+}

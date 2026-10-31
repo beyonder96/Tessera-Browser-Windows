@@ -1,0 +1,99 @@
+{
+  "name": "tessera-browser-windows",
+  "productName": "Tessera Browser",
+  "version": "1.0.0",
+  "description": "Tessera Browser for Windows — Navegador minimalista, editorial e inteligente com Spaces isolados, AirBar flutuante, AdBlock e Tessera AI.",
+  "main": "dist-electron/main.js",
+  "author": "Tessera Ecosystem",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "sync-assets": "node scripts/sync-android-assets.mjs",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "node scripts/sync-android-assets.mjs && tsc --noEmit && vite build",
+    "build:win": "npm run build && electron-builder --win nsis portable",
+    "release": "npm run build && electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11",
+    "lucide-react": "^0.468.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^34.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.6",
+    "vite-plugin-electron": "^0.29.0",
+    "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "com.tessera.browser.windows",
+    "productName": "Tessera Browser",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "beyonder96",
+        "repo": "Tessera-Browser-Windows"
+      }
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "asarUnpack": [
+      "dist-electron/webview-preload.cjs"
+    ],
+    "protocols": [
+      {
+        "name": "Tessera Browser Web Protocol",
+        "schemes": [
+          "http",
+          "https"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "Tessera-Browser-Setup-${version}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Tessera Browser"
+    },
+    "portable": {
+      "artifactName": "Tessera-Browser-Portable-${version}.exe"
+    }
+  }
+}
