@@ -51,6 +51,7 @@ export interface TesseraDesktopApi {
     conversationHistory: AiChatMessage[];
     userQuestion: string;
   }) => Promise<string>;
+  aiTranscribeAudio: (base64Audio: string, mimeType: string) => Promise<string>;
   bridgeStart: () => Promise<LocalBridgeStatus>;
   bridgeStop: () => Promise<LocalBridgeStatus>;
   bridgeGetStatus: () => Promise<LocalBridgeStatus>;
@@ -104,6 +105,8 @@ const api: TesseraDesktopApi = {
   aiSetApiKey: (provider, key) => ipcRenderer.invoke('tessera:ai-set-key', provider, key),
   aiGenerateSummary: (params) => ipcRenderer.invoke('tessera:ai-summary', params),
   aiAskQuestion: (params) => ipcRenderer.invoke('tessera:ai-ask', params),
+  aiTranscribeAudio: (base64Audio, mimeType) =>
+    ipcRenderer.invoke('tessera:ai-transcribe-audio', base64Audio, mimeType),
   bridgeStart: () => ipcRenderer.invoke('tessera:bridge-start'),
   bridgeStop: () => ipcRenderer.invoke('tessera:bridge-stop'),
   bridgeGetStatus: () => ipcRenderer.invoke('tessera:bridge-status'),

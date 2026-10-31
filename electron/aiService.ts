@@ -297,4 +297,177 @@ export class TesseraAiService {
 
     throw new Error(lastError);
   }
+
+  async transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
+    const groqKey = this.getApiKey('GROQ');
+    const geminiKey = this.getApiKey('GEMINI');
+
+    if (!groqKey && !geminiKey) {
+      throw new Error(
+        'Nenhuma chave de IA configurada para reconhecimento de voz. Configure sua chave gratuita do Groq (Whisper) ou Gemini nas Configurações de IA.'
+      );
+    }
+
+    // 1. Try Groq Whisper (ultra-fast ~150ms transcription)
+    if (groqKey) {
+      try {
+        const text = await this.executeGroqWhisper(groqKey, audioBuffer, mimeType);
+        if (text) return text;
+      } catch (err: any) {
+        console.warn('[TesseraAiService] Groq Whisper failed:', err?.message || err);
+        if (!geminiKey) {
+          throw err;
+        }
+      }
+    }
+
+    // 2. Try Google Gemini Audio Transcription
+    if (geminiKey) {
+      try {
+        const text = await this.executeGeminiAudio(geminiKey, audioBuffer, mimeType);
+        if (text) return text;
+      } catch (err: any) {
+        console.warn('[TesseraAiService] Gemini Audio failed:', err?.message || err);
+        throw err;
+      }
+    }
+
+    return '';
+  }
+
+  private async executeGroqWhisper(
+    apiKey: string,
+    audioBuffer: Buffer,
+    mimeType: string
+  ): Promise<string> {
+    const cleanMime = (mimeType || 'audio/webm').split(';')[0];
+    const ext = cleanMime.includes('webm')
+      ? 'webm'
+      : cleanMime.includes('ogg')
+      ? 'ogg'
+      : cleanMime.includes('wav')
+      ? 'wav'
+      : cleanMime.includes('mp4') || cleanMime.includes('m4a')
+      ? 'm4a'
+      : 'webm';
+
+    const formData = new FormData();
+    const file = new File([new Uint8Array(audioBuffer)], `voice_command.${ext}`, { type: cleanMime });
+    formData.append('file', file);
+    formData.append('model', 'whisper-large-v3-turbo');
+    formData.append('language', 'pt');
+    formData.append('response_format', 'json');
+    formData.append(
+      'prompt',
+      'Comandos de voz: pesquisar, resumir, nova guia, abrir site, modo leitor, modo escuro, ler página, Tessera.'
+    );
+
+    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey.trim()}`,
+        'User-Agent': 'TesseraBrowserWindows/1.0'
+      },
+      body: formData
+    });
+
+    if (res.ok) {
+      const json = (await res.json()) as { text?: string };
+      return json.text?.trim() || '';
+    }
+
+    // Fallback to whisper-large-v3 if whisper-large-v3-turbo returned 404 or model error
+    if (res.status === 404 || res.status === 400) {
+      const fbFormData = new FormData();
+      const fbFile = new File([new Uint8Array(audioBuffer)], `voice_command.${ext}`, { type: cleanMime });
+      fbFormData.append('file', fbFile);
+      fbFormData.append('model', 'whisper-large-v3');
+      fbFormData.append('language', 'pt');
+      fbFormData.append('response_format', 'json');
+
+      const fbRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey.trim()}`,
+          'User-Agent': 'TesseraBrowserWindows/1.0'
+        },
+        body: fbFormData
+      });
+
+      if (fbRes.ok) {
+        const fbJson = (await fbRes.json()) as { text?: string };
+        return fbJson.text?.trim() || '';
+      }
+    }
+
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Groq Whisper (${res.status}): ${errText.slice(0, 160)}`);
+  }
+
+  private async executeGeminiAudio(
+    apiKey: string,
+    audioBuffer: Buffer,
+    mimeType: string
+  ): Promise<string> {
+    const cleanMime = (mimeType || 'audio/webm').split(';')[0];
+    const base64Data = audioBuffer.toString('base64');
+    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-exp'];
+
+    let lastErr = 'Gemini Audio indisponível.';
+
+    for (const model of modelsToTry) {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+        apiKey.trim()
+      )}`;
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'User-Agent': 'TesseraBrowserWindows/1.0'
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: cleanMime,
+                    data: base64Data
+                  }
+                },
+                {
+                  text: 'Transcreva em Português do Brasil exatamente o que o usuário falou neste comando de voz para o navegador. Retorne estritamente o texto falado sem aspas, sem pontuações desnecessárias e sem nenhuma explicação.'
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 256
+          }
+        })
+      });
+
+      if (res.ok) {
+        const json = (await res.json()) as {
+          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        };
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        return text.replace(/^["']|["']$/g, '').trim();
+      }
+
+      if (res.status === 404) {
+        lastErr = `Modelo Gemini ${model} 404`;
+        continue;
+      }
+
+      const errText = await res.text().catch(() => '');
+      lastErr = `Gemini Audio (${res.status}): ${errText.slice(0, 160)}`;
+      break;
+    }
+
+    throw new Error(lastErr);
+  }
 }

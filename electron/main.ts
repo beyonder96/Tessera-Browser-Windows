@@ -479,6 +479,10 @@ app.whenReady().then(() => {
   ipcMain.handle('tessera:ai-set-key', (_e, provider, key) => aiService.setApiKey(provider, key));
   ipcMain.handle('tessera:ai-summary', (_e, params) => aiService.generateSummary(params));
   ipcMain.handle('tessera:ai-ask', (_e, params) => aiService.askQuestion(params));
+  ipcMain.handle('tessera:ai-transcribe-audio', async (_e, base64Audio: string, mimeType: string) => {
+    const buffer = Buffer.from(base64Audio, 'base64');
+    return aiService.transcribeAudio(buffer, mimeType);
+  });
 
   // Local Wi-Fi Bridge
   ipcMain.handle('tessera:bridge-start', () => localBridge.start());

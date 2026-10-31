@@ -14,6 +14,18 @@ export type VoiceIntent =
 
 type StateListener = (state: VoiceAssistantState) => void;
 type IntentListener = (intent: VoiceIntent) => void;
+type AudioLevelListener = (level: number) => void;
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const arrayBuffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize) as any);
+  }
+  return window.btoa(binary);
+}
 
 class VoiceActivationService {
   private state: VoiceAssistantState = {
@@ -27,94 +39,43 @@ class VoiceActivationService {
 
   private stateListeners: Set<StateListener> = new Set();
   private intentListeners: Set<IntentListener> = new Set();
-  private recognition: any = null;
+  private audioLevelListeners: Set<AudioLevelListener> = new Set();
+
   private audioCtx: AudioContext | null = null;
+  private analyser: AnalyserNode | null = null;
+  private activeStream: MediaStream | null = null;
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
+  private recordingMimeType = 'audio/webm;codecs=opus';
+
+  private vadAnimId: number | null = null;
+  private hasDetectedSpeech = false;
+  private lastVoiceTimestamp = 0;
+  private listeningStartedAt = 0;
+  private isProcessingAudio = false;
+
   private isContinuousWakeWordRunning = false;
+  private wakeWordStream: MediaStream | null = null;
+  private wakeWordRecorder: MediaRecorder | null = null;
+  private wakeWordChunks: Blob[] = [];
+  private wakeWordCheckInProgress = false;
+  private wakeWordAnimId: number | null = null;
+
   private manualTriggerActive = false;
   private commandTimeoutId: number | null = null;
 
   constructor() {
-    this.initRecognition();
-  }
-
-  private initRecognition() {
-    const SpeechRecognition =
-      (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-    if (!SpeechRecognition) {
-      this.state.error = 'Reconhecimento de voz não suportado neste ambiente.';
-      return;
-    }
-
-    try {
-      // Pre-warm audio permissions & devices in Windows
-      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
-        navigator.mediaDevices
-          .getUserMedia({ audio: true })
-          .then((stream) => {
-            stream.getTracks().forEach((track) => track.stop());
-          })
-          .catch((err) => {
-            console.warn('[VoiceActivation] Audio pre-warm notice:', err);
-          });
+    // Best available audio mime type
+    if (typeof MediaRecorder !== 'undefined') {
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        this.recordingMimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+        this.recordingMimeType = 'audio/webm';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+        this.recordingMimeType = 'audio/ogg;codecs=opus';
+      } else {
+        this.recordingMimeType = '';
       }
-
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = true;
-      this.recognition.interimResults = true;
-      this.recognition.lang = 'pt-BR';
-
-      this.recognition.onresult = (event: any) => {
-        let interim = '';
-        let final = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const item = event.results[i];
-          const text = item[0].transcript;
-          if (item.isFinal) {
-            final += text;
-          } else {
-            interim += text;
-          }
-        }
-
-        this.handleSpeechResult(final.trim(), interim.trim());
-      };
-
-      this.recognition.onerror = (event: any) => {
-        if (event.error === 'no-speech') return;
-        console.warn('[VoiceActivation] Speech error:', event.error);
-        if (event.error === 'not-allowed') {
-          this.updateState({
-            status: 'error',
-            error: 'Permissão de microfone negada no Windows. Role a página de Privacidade até "Permitir que os aplicativos da área de trabalho acessem o microfone".'
-          });
-        } else if (event.error === 'network') {
-          this.updateState({
-            status: 'error',
-            error: 'Serviço de voz em nuvem do Chromium indisponível. Você pode digitar seu comando abaixo ou usar as ações rápidas.'
-          });
-        } else {
-          this.updateState({
-            status: 'error',
-            error: `Status do microfone: ${event.error}. Digite seu comando abaixo.`
-          });
-        }
-      };
-
-      this.recognition.onend = () => {
-        // Auto-restart if continuous wake-word mode is active and not manually stopped
-        if (this.isContinuousWakeWordRunning && !this.manualTriggerActive) {
-          try {
-            this.recognition.start();
-          } catch {
-            // Already active or temporarily busy
-          }
-        } else if (!this.state.isActive) {
-          this.updateState({ status: 'idle' });
-        }
-      };
-    } catch (e) {
-      console.error('[VoiceActivation] Initialization failed', e);
     }
   }
 
@@ -130,7 +91,7 @@ class VoiceActivationService {
   }
 
   /**
-   * Generates a sleek, futuristic 2-tone Apple/Siri style ascending audio chime
+   * Generates a sleek 2-tone Apple/Siri style ascending audio chime
    */
   public playWakeChime() {
     try {
@@ -206,65 +167,247 @@ class VoiceActivationService {
     } catch {}
   }
 
-  public startContinuousWakeWord() {
-    this.isContinuousWakeWordRunning = true;
-    if (this.recognition) {
-      try {
-        this.recognition.start();
-      } catch {}
-    }
-  }
-
-  public stopContinuousWakeWord() {
-    this.isContinuousWakeWordRunning = false;
-    if (this.recognition && !this.state.isActive) {
-      try {
-        this.recognition.stop();
-      } catch {}
-    }
-  }
-
   /**
-   * Triggered by Mic button in AirBar
+   * Triggered by Mic button in AirBar or shortcut
    */
-  public activateManualListening() {
+  public async activateManualListening() {
     this.manualTriggerActive = true;
     this.playWakeChime();
+
+    // Reset previous audio capture state
+    this.cleanupRecordingResources();
+
     this.updateState({
       isActive: true,
       status: 'listening',
       transcript: '',
-      interimTranscript: 'Ouvindo...',
+      interimTranscript: 'Ouvindo sua voz...',
       error: null
     });
 
-    // Check Windows hardware mic permissions via Web Audio
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices
-        .getUserMedia({ audio: true })
-        .then((stream) => {
-          stream.getTracks().forEach((track) => track.stop());
-        })
-        .catch((err) => {
-          console.warn('[VoiceActivation] Microphone access error:', err);
-          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-            this.updateState({
-              error:
-                'Microfone bloqueado pelo Windows. Vá em Configurações > Privacidade > Microfone e ative "Permitir que os aplicativos da área de trabalho acessem o microfone".'
-            });
-          }
-        });
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      this.updateState({
+        status: 'error',
+        error: 'Microfone não suportado nesta plataforma.'
+      });
+      return;
     }
 
-    if (this.recognition) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+
+      this.activeStream = stream;
+      this.setupRecordingAndVAD(stream);
+    } catch (err: any) {
+      console.warn('[VoiceActivation] getUserMedia failed:', err);
+      let errorMsg = 'Microfone inacessível no Windows.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        errorMsg =
+          'Microfone bloqueado pelo Windows. Vá em Configurações do Windows > Privacidade > Microfone e ative "Permitir que os aplicativos da área de trabalho acessem o microfone".';
+      }
+      this.updateState({
+        status: 'error',
+        error: errorMsg
+      });
+    }
+  }
+
+  private setupRecordingAndVAD(stream: MediaStream) {
+    try {
+      const ctx = this.getAudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 64;
+      analyser.smoothingTimeConstant = 0.35;
+      source.connect(analyser);
+      this.analyser = analyser;
+
+      // Initialize MediaRecorder
+      const options = this.recordingMimeType ? { mimeType: this.recordingMimeType } : undefined;
+      const recorder = new MediaRecorder(stream, options);
+      this.mediaRecorder = recorder;
+      this.recordedChunks = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          this.recordedChunks.push(event.data);
+        }
+      };
+
+      recorder.start(100);
+
+      this.hasDetectedSpeech = false;
+      this.lastVoiceTimestamp = 0;
+      this.listeningStartedAt = Date.now();
+      this.isProcessingAudio = false;
+
+      // Start Voice Activity Detection (VAD) & audio level dispatch loop
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const vadLoop = () => {
+        if (!this.state.isActive || this.isProcessingAudio || !this.mediaRecorder) {
+          return;
+        }
+
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        const normalized = Math.min(1, Math.max(0, avg / 128));
+
+        // Notify audio level visualizer listeners
+        for (const listener of this.audioLevelListeners) {
+          listener(normalized);
+        }
+
+        const now = Date.now();
+
+        // Speech detection threshold
+        if (normalized > 0.07) {
+          if (!this.hasDetectedSpeech) {
+            this.hasDetectedSpeech = true;
+            this.updateState({ interimTranscript: 'Ouvindo...' });
+          }
+          this.lastVoiceTimestamp = now;
+        }
+
+        // Auto-finalize when user finishes speaking (1.1s of silence after speaking)
+        if (this.hasDetectedSpeech && now - this.lastVoiceTimestamp > 1100) {
+          void this.stopAndTranscribe();
+          return;
+        }
+
+        // 8 seconds timeout without any speech detected
+        if (!this.hasDetectedSpeech && now - this.listeningStartedAt > 8000) {
+          this.updateState({
+            status: 'error',
+            error: 'Nenhuma voz ouvida. Toque no microfone e tente falar novamente.'
+          });
+          this.cleanupRecordingResources();
+          return;
+        }
+
+        // Hard safety timeout: 14s max duration
+        if (now - this.listeningStartedAt > 14000) {
+          void this.stopAndTranscribe();
+          return;
+        }
+
+        this.vadAnimId = requestAnimationFrame(vadLoop);
+      };
+
+      this.vadAnimId = requestAnimationFrame(vadLoop);
+    } catch (err) {
+      console.error('[VoiceActivation] setupRecordingAndVAD error:', err);
+    }
+  }
+
+  /**
+   * Stops recording and executes AI audio transcription
+   */
+  public async stopAndTranscribe() {
+    if (this.isProcessingAudio) return;
+    this.isProcessingAudio = true;
+
+    if (this.vadAnimId) {
+      cancelAnimationFrame(this.vadAnimId);
+      this.vadAnimId = null;
+    }
+
+    // Zero out audio levels
+    for (const listener of this.audioLevelListeners) {
+      listener(0);
+    }
+
+    this.updateState({
+      status: 'processing',
+      interimTranscript: 'Processando com Tessera AI...'
+    });
+
+    const recorder = this.mediaRecorder;
+    if (!recorder) {
+      this.updateState({ status: 'idle' });
+      this.isProcessingAudio = false;
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      if (recorder.state === 'inactive') {
+        resolve();
+        return;
+      }
+      recorder.onstop = () => resolve();
       try {
-        this.recognition.start();
-      } catch (err) {
-        console.warn('[VoiceActivation] Start error:', err);
+        recorder.stop();
+      } catch {
+        resolve();
+      }
+    });
+
+    const chunks = this.recordedChunks;
+    const stream = this.activeStream;
+    this.cleanupRecordingResources();
+
+    if (!chunks.length) {
+      this.updateState({
+        status: 'error',
+        error: 'Nenhum áudio capturado. Toque no microfone e tente falar novamente.'
+      });
+      this.isProcessingAudio = false;
+      return;
+    }
+
+    try {
+      const mime = recorder.mimeType || this.recordingMimeType || 'audio/webm';
+      const audioBlob = new Blob(chunks, { type: mime });
+      const base64Audio = await blobToBase64(audioBlob);
+
+      if (window.tesseraApi?.aiTranscribeAudio) {
+        const text = await window.tesseraApi.aiTranscribeAudio(base64Audio, mime);
+        const clean = (text || '').trim();
+
+        if (clean) {
+          this.updateState({
+            status: 'processing',
+            transcript: clean,
+            interimTranscript: clean
+          });
+          this.processRecognizedCommand(clean);
+        } else {
+          this.updateState({
+            status: 'error',
+            error: 'Não foi possível reconhecer o comando de voz. Tente falar novamente.'
+          });
+        }
+      } else {
+        throw new Error('Serviço de transcrição nativo do Tessera indisponível.');
+      }
+    } catch (err: any) {
+      console.warn('[VoiceActivation] Transcription error:', err);
+      this.updateState({
+        status: 'error',
+        error: err?.message || 'Falha ao processar o áudio com Tessera AI.'
+      });
+    } finally {
+      this.isProcessingAudio = false;
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
       }
     }
+  }
 
-    this.resetCommandTimeout();
+  /**
+   * Finishes recording immediately when the user clicks 'Concluir'
+   */
+  public finishRecordingManually() {
+    void this.stopAndTranscribe();
   }
 
   /**
@@ -274,6 +417,8 @@ class VoiceActivationService {
     const clean = command.trim();
     if (!clean) return;
     this.manualTriggerActive = true;
+    this.cleanupRecordingResources();
+
     this.updateState({
       isActive: true,
       status: 'processing',
@@ -286,11 +431,14 @@ class VoiceActivationService {
 
   public cancel() {
     this.manualTriggerActive = false;
+    this.cleanupRecordingResources();
     this.playDismissChime();
+
     if (this.commandTimeoutId) {
       clearTimeout(this.commandTimeoutId);
       this.commandTimeoutId = null;
     }
+
     this.updateState({
       isActive: false,
       status: 'idle',
@@ -300,63 +448,146 @@ class VoiceActivationService {
     });
   }
 
-  private resetCommandTimeout() {
-    if (this.commandTimeoutId) clearTimeout(this.commandTimeoutId);
-    this.commandTimeoutId = window.setTimeout(() => {
-      if (this.state.isActive && !this.state.transcript) {
-        this.cancel();
-      }
-    }, 8000);
+  private cleanupRecordingResources() {
+    if (this.vadAnimId) {
+      cancelAnimationFrame(this.vadAnimId);
+      this.vadAnimId = null;
+    }
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      try {
+        this.mediaRecorder.stop();
+      } catch {}
+    }
+    this.mediaRecorder = null;
+    if (this.activeStream) {
+      this.activeStream.getTracks().forEach((track) => track.stop());
+      this.activeStream = null;
+    }
+    for (const listener of this.audioLevelListeners) {
+      listener(0);
+    }
   }
 
-  private handleSpeechResult(finalText: string, interimText: string) {
-    const raw = (finalText || interimText).trim();
-    if (!raw) return;
+  /**
+   * Continuous Wake Word ("Ei Tessera") background listener
+   */
+  public async startContinuousWakeWord() {
+    if (this.isContinuousWakeWordRunning) return;
+    this.isContinuousWakeWordRunning = true;
 
-    // 1. Wake word pattern check with PT-BR phonetic tolerance:
-    // Matches: "Ei Tessera", "Ok Tessera", "Tessera", "Téssera", "Te serra", "Terceira", "Tess", "Tessa", "Disse era", etc.
-    const wakeWordRegex =
-      /(?:^|\s)(?:ei|ok|hey|ol[aá]|a[ií]|e\s+a[ií])?\s*(?:t[eé][sc][sc]?[eé]ra|te\s+serra|teceira|terceira|tess|tessa|disse\s+era|de\s+cera|que\s+ser[aá])[\s,.:!-]*(.*)$/i;
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
 
-    if (!this.state.isActive) {
-      const match = raw.match(wakeWordRegex);
-      if (match) {
-        // Wake word detected!
-        this.playWakeChime();
-        const trailingCommand = match[1]?.trim() || '';
-        this.updateState({
-          isActive: true,
-          status: 'listening',
-          transcript: trailingCommand,
-          interimTranscript: trailingCommand || 'Ouvindo...'
-        });
-        this.resetCommandTimeout();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+      this.wakeWordStream = stream;
 
-        if (trailingCommand && finalText) {
-          this.processRecognizedCommand(trailingCommand);
+      const ctx = this.getAudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 64;
+      analyser.smoothingTimeConstant = 0.5;
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const loop = () => {
+        if (!this.isContinuousWakeWordRunning || !this.wakeWordStream) return;
+
+        // Skip background wake word detection if main overlay is currently open
+        if (this.state.isActive) {
+          this.wakeWordAnimId = requestAnimationFrame(loop);
+          return;
+        }
+
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        const normalized = avg / 128;
+
+        // Sound trigger threshold
+        if (normalized > 0.12 && !this.wakeWordCheckInProgress) {
+          this.captureWakeWordSnippet(stream);
+        }
+
+        this.wakeWordAnimId = requestAnimationFrame(loop);
+      };
+
+      this.wakeWordAnimId = requestAnimationFrame(loop);
+    } catch (err) {
+      console.warn('[VoiceActivation] Continuous wake word mic notice:', err);
+    }
+  }
+
+  private async captureWakeWordSnippet(stream: MediaStream) {
+    if (this.wakeWordCheckInProgress || this.state.isActive) return;
+    this.wakeWordCheckInProgress = true;
+
+    try {
+      const options = this.recordingMimeType ? { mimeType: this.recordingMimeType } : undefined;
+      const rec = new MediaRecorder(stream, options);
+      const chunks: Blob[] = [];
+
+      rec.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+
+      rec.start();
+      await new Promise((r) => setTimeout(r, 2200));
+
+      await new Promise<void>((resolve) => {
+        rec.onstop = () => resolve();
+        try {
+          rec.stop();
+        } catch {
+          resolve();
+        }
+      });
+
+      if (!chunks.length || this.state.isActive) {
+        this.wakeWordCheckInProgress = false;
+        return;
+      }
+
+      const blob = new Blob(chunks, { type: rec.mimeType || this.recordingMimeType });
+      const b64 = await blobToBase64(blob);
+
+      if (window.tesseraApi?.aiTranscribeAudio) {
+        const text = await window.tesseraApi.aiTranscribeAudio(b64, blob.type);
+        const raw = (text || '').trim();
+
+        const wakeWordRegex =
+          /(?:^|\s)(?:ei|ok|hey|ol[aá]|a[ií]|e\s+a[ií])?\s*(?:t[eé][sc][sc]?[eé]ra|te\s+serra|teceira|terceira|tess|tessa|disse\s+era|de\s+cera|que\s+ser[aá])[\s,.:!-]*(.*)$/i;
+
+        const match = raw.match(wakeWordRegex);
+        if (match) {
+          const trailing = match[1]?.trim() || '';
+          this.activateManualListening();
+
+          if (trailing) {
+            setTimeout(() => {
+              this.processRecognizedCommand(trailing);
+            }, 300);
+          }
         }
       }
-      return;
+    } catch {}
+    this.wakeWordCheckInProgress = false;
+  }
+
+  public stopContinuousWakeWord() {
+    this.isContinuousWakeWordRunning = false;
+    if (this.wakeWordAnimId) {
+      cancelAnimationFrame(this.wakeWordAnimId);
+      this.wakeWordAnimId = null;
     }
-
-    // 2. Already active in listening mode
-    this.resetCommandTimeout();
-    this.updateState({
-      interimTranscript: interimText || finalText,
-      transcript: finalText || this.state.transcript
-    });
-
-    if (finalText) {
-      // Strip any accidental leading wake word variants
-      const cleanCommand = finalText
-        .replace(
-          /(?:^|\s)(?:ei|ok|hey|ol[aá]|a[ií]|e\s+a[ií])?\s*(?:t[eé][sc][sc]?[eé]ra|te\s+serra|teceira|terceira|tess|tessa|disse\s+era|de\s+cera|que\s+ser[aá])[\s,.:!]*/i,
-          ''
-        )
-        .trim();
-      if (cleanCommand) {
-        this.processRecognizedCommand(cleanCommand);
-      }
+    if (this.wakeWordStream) {
+      this.wakeWordStream.getTracks().forEach((track) => track.stop());
+      this.wakeWordStream = null;
     }
   }
 
@@ -484,6 +715,11 @@ class VoiceActivationService {
   public subscribeIntent(listener: IntentListener): () => void {
     this.intentListeners.add(listener);
     return () => this.intentListeners.delete(listener);
+  }
+
+  public subscribeAudioLevel(listener: AudioLevelListener): () => void {
+    this.audioLevelListeners.add(listener);
+    return () => this.audioLevelListeners.delete(listener);
   }
 }
 

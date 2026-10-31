@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, X, Sparkles, Volume2, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Mic, X, Sparkles, Volume2, AlertTriangle, ArrowRight, Check } from 'lucide-react';
 import type { VoiceAssistantState } from '../shared/types';
+import { voiceActivationService } from '../services/voiceActivationService';
 
 interface VoiceAssistantOverlayProps {
   state: VoiceAssistantState;
@@ -15,10 +16,9 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
 }) => {
   const [manualText, setManualText] = useState('');
   const [realAudioLevel, setRealAudioLevel] = useState(0);
-  const [micDeviceAllowed, setMicDeviceAllowed] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Measure real microphone audio volume in real-time via Web Audio API
+  // Subscribe to real microphone audio volume in real-time
   useEffect(() => {
     if (!state.isActive) {
       setRealAudioLevel(0);
@@ -26,54 +26,13 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
       return;
     }
 
-    let stream: MediaStream | null = null;
-    let audioCtx: AudioContext | null = null;
-    let animId: number | null = null;
-
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices
-        .getUserMedia({ audio: true })
-        .then((s) => {
-          stream = s;
-          setMicDeviceAllowed(true);
-          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-          if (!AudioContextClass) return;
-
-          audioCtx = new AudioContextClass();
-          const source = audioCtx.createMediaStreamSource(s);
-          const analyser = audioCtx.createAnalyser();
-          analyser.fftSize = 64;
-          analyser.smoothingTimeConstant = 0.4;
-          source.connect(analyser);
-
-          const dataArray = new Uint8Array(analyser.frequencyBinCount);
-          const updateLevel = () => {
-            analyser.getByteFrequencyData(dataArray);
-            let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-              sum += dataArray[i];
-            }
-            const avg = sum / dataArray.length;
-            const normalized = Math.min(1, Math.max(0, avg / 128));
-            setRealAudioLevel(normalized);
-            animId = requestAnimationFrame(updateLevel);
-          };
-          updateLevel();
-        })
-        .catch((err) => {
-          console.warn('[VoiceOverlay] getUserMedia notice:', err);
-          setMicDeviceAllowed(false);
-        });
-    }
+    const unsub = voiceActivationService.subscribeAudioLevel((level) => {
+      setRealAudioLevel(level);
+    });
 
     return () => {
-      if (animId) cancelAnimationFrame(animId);
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
-      }
-      if (audioCtx && audioCtx.state !== 'closed') {
-        void audioCtx.close();
-      }
+      unsub();
+      setRealAudioLevel(0);
     };
   }, [state.isActive]);
 
@@ -111,7 +70,7 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
       {/* Siri macOS Sequoia / Dynamic Island Sleek Capsule */}
       <div
         style={{
-          width: 450,
+          width: 460,
           maxWidth: 'calc(100vw - 32px)',
           borderRadius: 22,
           background: 'var(--bg-elevated)',
@@ -128,7 +87,7 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
       >
         {/* Header: Siri Glowing Orb + Dynamic Sound Wave + Status + Close */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
             {/* Glowing Apple-style Sphere */}
             <div
               style={{
@@ -138,7 +97,7 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
                 background:
                   state.status === 'processing'
                     ? 'linear-gradient(135deg, #AF52DE, #FF2D55)'
-                    : state.error || micDeviceAllowed === false
+                    : state.error
                     ? 'linear-gradient(135deg, #FF9500, #FF3B30)'
                     : 'linear-gradient(135deg, #0A84FF, #30D158)',
                 display: 'flex',
@@ -148,7 +107,7 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
                 boxShadow:
                   state.status === 'processing'
                     ? '0 0 14px rgba(175, 82, 222, 0.55)'
-                    : state.error || micDeviceAllowed === false
+                    : state.error
                     ? '0 0 14px rgba(255, 59, 48, 0.45)'
                     : '0 0 14px rgba(10, 132, 255, 0.55)',
                 animation: 'pulse 1.4s ease-in-out infinite'
@@ -156,7 +115,7 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
             >
               {state.status === 'processing' ? (
                 <Sparkles size={14} color="#FFF" />
-              ) : state.error || micDeviceAllowed === false ? (
+              ) : state.error ? (
                 <AlertTriangle size={14} color="#FFF" />
               ) : (
                 <Mic size={14} color="#FFF" />
@@ -169,15 +128,17 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
               </span>
               <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
                 {state.status === 'processing'
-                  ? 'Processando comando...'
+                  ? 'Processando com Tessera AI...'
                   : realAudioLevel > 0.08
                   ? 'Ouvindo sua voz...'
-                  : 'Fale ou digite um comando...'}
+                  : state.error
+                  ? 'Comando de voz'
+                  : 'Fale seu comando ou pesquise...'}
               </span>
             </div>
           </div>
 
-          {/* Equalizer Waveform in Header (Clean & Integrated) */}
+          {/* Equalizer Waveform in Header */}
           <div
             style={{
               display: 'flex',
@@ -213,6 +174,32 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
             })}
           </div>
 
+          {/* Finish Speaking Early button */}
+          {state.status === 'listening' && (
+            <button
+              onClick={() => voiceActivationService.finishRecordingManually()}
+              title="Concluir fala agora e enviar comando"
+              style={{
+                background: 'rgba(52, 199, 89, 0.15)',
+                border: '1px solid rgba(52, 199, 89, 0.35)',
+                borderRadius: 14,
+                padding: '3px 8px',
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#34C759',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'pointer',
+                flexShrink: 0,
+                transition: 'all 0.12s ease'
+              }}
+            >
+              <Check size={12} />
+              <span>Concluir</span>
+            </button>
+          )}
+
           {/* Close button */}
           <button
             onClick={onCancel}
@@ -239,7 +226,7 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
         {(state.transcript || state.interimTranscript) && (
           <div
             style={{
-              fontSize: 13.5,
+              fontSize: 13,
               fontWeight: 600,
               color: 'var(--text-primary)',
               background: 'var(--bg-surface)',
@@ -257,8 +244,8 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
           </div>
         )}
 
-        {/* Permission / Status Banner (if blocked in Windows) */}
-        {(state.error || micDeviceAllowed === false) && (
+        {/* Permission / Status Banner (if error) */}
+        {state.error && (
           <div
             style={{
               background: 'rgba(255, 149, 0, 0.12)',
@@ -274,10 +261,7 @@ export const VoiceAssistantOverlay: React.FC<VoiceAssistantOverlayProps> = ({
             }}
           >
             <AlertTriangle size={14} color="#FF9500" style={{ flexShrink: 0 }} />
-            <span>
-              {state.error ||
-                'Microfone inativo no Windows. Ative "Permitir que aplicativos da área de trabalho acessem o microfone" nas configurações.'}
-            </span>
+            <span>{state.error}</span>
           </div>
         )}
 
