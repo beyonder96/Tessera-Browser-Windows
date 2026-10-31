@@ -86,9 +86,9 @@
     },
     "nsis": {
       "artifactName": "Tessera-Browser-Setup-${version}.${ext}",
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Tessera Browser"
