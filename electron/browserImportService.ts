@@ -19,6 +19,32 @@ export interface ExtractedBookmark {
 
 export class BrowserImportService {
   /**
+   * Discovers all profile directories within a Chromium User Data folder (Default, Profile 1, Profile 2, etc.)
+   */
+  public static getProfileDirs(userDataDir: string): string[] {
+    const profileDirs: string[] = [];
+    if (!fs.existsSync(userDataDir)) return profileDirs;
+
+    const defaultDir = path.join(userDataDir, 'Default');
+    if (fs.existsSync(defaultDir)) {
+      profileDirs.push(defaultDir);
+    }
+
+    try {
+      const entries = fs.readdirSync(userDataDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name.startsWith('Profile ')) {
+          profileDirs.push(path.join(userDataDir, entry.name));
+        }
+      }
+    } catch {
+      // ignore readdir error
+    }
+
+    return profileDirs;
+  }
+
+  /**
    * Scans local Windows AppData for Google Chrome and Microsoft Edge profiles.
    */
   public static getInstalledBrowsers(): InstalledBrowserInfo[] {
@@ -27,14 +53,17 @@ export class BrowserImportService {
     // 1. Google Chrome
     try {
       const localAppData = process.env.LOCALAPPDATA || '';
-      const chromeDefaultDir = path.join(localAppData, 'Google', 'Chrome', 'User Data', 'Default');
-      if (fs.existsSync(chromeDefaultDir)) {
+      const chromeUserDataDir = path.join(localAppData, 'Google', 'Chrome', 'User Data');
+      const chromeProfiles = this.getProfileDirs(chromeUserDataDir);
+
+      if (chromeProfiles.length > 0) {
         let email: string | undefined;
         let profileName: string | undefined;
         let avatarUrl: string | undefined;
 
-        // Try reading Preferences for Google Account info
-        const prefPath = path.join(chromeDefaultDir, 'Preferences');
+        // Try reading Preferences from the primary profile for Google Account info
+        const primaryDir = chromeProfiles[0];
+        const prefPath = path.join(primaryDir, 'Preferences');
         if (fs.existsSync(prefPath)) {
           try {
             const prefJson = JSON.parse(fs.readFileSync(prefPath, 'utf8'));
@@ -51,13 +80,13 @@ export class BrowserImportService {
           }
         }
 
-        const bookmarks = this.extractChromeBookmarks(chromeDefaultDir);
+        const bookmarks = this.extractChromeBookmarks(chromeUserDataDir);
 
         results.push({
           id: 'chrome',
           name: 'Google Chrome',
           isInstalled: true,
-          profileName: profileName || 'Perfil Padrão',
+          profileName: profileName || (chromeProfiles.length > 1 ? `${chromeProfiles.length} Perfis` : 'Perfil Padrão'),
           email,
           avatarUrl,
           bookmarkCount: bookmarks.length
@@ -70,11 +99,14 @@ export class BrowserImportService {
     // 2. Microsoft Edge
     try {
       const localAppData = process.env.LOCALAPPDATA || '';
-      const edgeDefaultDir = path.join(localAppData, 'Microsoft', 'Edge', 'User Data', 'Default');
-      if (fs.existsSync(edgeDefaultDir)) {
-        let profileName: string | undefined;
+      const edgeUserDataDir = path.join(localAppData, 'Microsoft', 'Edge', 'User Data');
+      const edgeProfiles = this.getProfileDirs(edgeUserDataDir);
 
-        const prefPath = path.join(edgeDefaultDir, 'Preferences');
+      if (edgeProfiles.length > 0) {
+        let profileName: string | undefined;
+        const primaryDir = edgeProfiles[0];
+        const prefPath = path.join(primaryDir, 'Preferences');
+
         if (fs.existsSync(prefPath)) {
           try {
             const prefJson = JSON.parse(fs.readFileSync(prefPath, 'utf8'));
@@ -86,13 +118,13 @@ export class BrowserImportService {
           }
         }
 
-        const bookmarks = this.extractChromeBookmarks(edgeDefaultDir);
+        const bookmarks = this.extractChromeBookmarks(edgeUserDataDir);
 
         results.push({
           id: 'edge',
           name: 'Microsoft Edge',
           isInstalled: true,
-          profileName: profileName || 'Perfil Padrão',
+          profileName: profileName || (edgeProfiles.length > 1 ? `${edgeProfiles.length} Perfis` : 'Perfil Padrão'),
           bookmarkCount: bookmarks.length
         });
       }
@@ -104,30 +136,44 @@ export class BrowserImportService {
   }
 
   /**
-   * Extracts bookmarks from a Chromium-based User Data directory
-   * Supports standard Bookmarks and AccountBookmarks
+   * Extracts bookmarks from a Chromium-based User Data directory or single profile directory.
+   * Supports standard Bookmarks and AccountBookmarks across all profiles.
    */
-  public static extractChromeBookmarks(profileDir: string): ExtractedBookmark[] {
+  public static extractChromeBookmarks(targetPath: string): ExtractedBookmark[] {
     const list: ExtractedBookmark[] = [];
+    if (!fs.existsSync(targetPath)) return list;
 
-    // Prioritize AccountBookmarks (synced Google Account) if present, then Bookmarks
-    const candidates = [
-      path.join(profileDir, 'AccountBookmarks'),
-      path.join(profileDir, 'Bookmarks')
-    ];
+    // Check if targetPath is a User Data root or a specific profile directory
+    let profileDirs: string[] = [];
+    if (fs.existsSync(path.join(targetPath, 'Bookmarks')) || fs.existsSync(path.join(targetPath, 'AccountBookmarks'))) {
+      profileDirs = [targetPath];
+    } else {
+      profileDirs = this.getProfileDirs(targetPath);
+      if (profileDirs.length === 0) {
+        // Fallback to checking targetPath itself
+        profileDirs = [targetPath];
+      }
+    }
 
-    for (const targetFile of candidates) {
-      if (fs.existsSync(targetFile)) {
-        try {
-          const raw = fs.readFileSync(targetFile, 'utf8');
-          const data = JSON.parse(raw);
-          if (data && typeof data.roots === 'object') {
-            for (const rootKey of Object.keys(data.roots)) {
-              this.traverseNodes(data.roots[rootKey], list);
+    for (const profileDir of profileDirs) {
+      const candidates = [
+        path.join(profileDir, 'AccountBookmarks'),
+        path.join(profileDir, 'Bookmarks')
+      ];
+
+      for (const targetFile of candidates) {
+        if (fs.existsSync(targetFile)) {
+          try {
+            const raw = fs.readFileSync(targetFile, 'utf8');
+            const data = JSON.parse(raw);
+            if (data && typeof data.roots === 'object') {
+              for (const rootKey of Object.keys(data.roots)) {
+                this.traverseNodes(data.roots[rootKey], list);
+              }
             }
+          } catch {
+            // ignore corrupted or unreadable bookmark files
           }
-        } catch {
-          // ignore corrupted or unreadable bookmark files
         }
       }
     }

@@ -563,9 +563,10 @@ export const IncognitoLockOverlay: React.FC<{
 
   if (!visible || !expectedPinHash) return null;
 
-  const handleVerify = (e: React.FormEvent) => {
+  const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (btoa(pin) === expectedPinHash) {
+    const isValid = (await window.tesseraApi?.pinVerify?.(pin, expectedPinHash)) || (btoa(pin) === expectedPinHash);
+    if (isValid) {
       setPin('');
       setError(false);
       onUnlocked();

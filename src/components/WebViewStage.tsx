@@ -95,6 +95,7 @@ function isAuthProtectedUrl(rawUrl: string): boolean {
 
 function sanitizeInitialTabUrl(rawUrl: string): string {
   if (/^https:\/\/accounts\.google\.com\/(v3\/)?signin\/rejected/i.test(rawUrl)) {
+    void window.tesseraApi?.clearGoogleAuthCookies?.();
     return 'https://accounts.google.com/';
   }
   return rawUrl;
@@ -134,6 +135,45 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       x: number;
       y: number;
     } | null>(null);
+
+    // Latest props ref to eliminate stale closures in long-lived webview event listeners
+    const latestPropsRef = useRef({
+      tabs,
+      activeTabId,
+      settings,
+      siteSettings,
+      onUpdateTab,
+      onRecordHistory,
+      onScrollDirection,
+      onPeekLink,
+      onForeignLanguageDetected,
+      onReaderAvailabilityChanged,
+      onAskAiWithSelection,
+      onListenSelection,
+      onFindMatchesUpdated,
+      onOpenNewTab,
+      onShowContextMenu,
+      onHtmlFullScreenChange
+    });
+
+    latestPropsRef.current = {
+      tabs,
+      activeTabId,
+      settings,
+      siteSettings,
+      onUpdateTab,
+      onRecordHistory,
+      onScrollDirection,
+      onPeekLink,
+      onForeignLanguageDetected,
+      onReaderAvailabilityChanged,
+      onAskAiWithSelection,
+      onListenSelection,
+      onFindMatchesUpdated,
+      onOpenNewTab,
+      onShowContextMenu,
+      onHtmlFullScreenChange
+    };
 
     const getActiveWebview = (): ElectronWebviewElement | null => {
       return webviewRefs.current[activeTabId] || null;
@@ -232,11 +272,73 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       translateActivePage: async () => {
         const wv = getActiveWebview();
         if (!wv) return;
+        try {
+          const rawNodes = await wv.executeJavaScript<string>(
+            `(() => {
+              try {
+                const selectors = 'h1, h2, h3, h4, h5, h6, p, li, article p, section p';
+                const els = Array.from(document.querySelectorAll(selectors));
+                const items = [];
+                for (let i = 0; i < els.length && items.length < 80; i++) {
+                  const el = els[i];
+                  const text = (el.innerText || '').trim();
+                  if (text.length > 3 && !el.hasAttribute('data-tessera-orig')) {
+                    el.setAttribute('data-tessera-orig', text);
+                    el.setAttribute('data-tessera-idx', String(items.length));
+                    items.push(text);
+                  }
+                }
+                return JSON.stringify(items);
+              } catch {
+                return '[]';
+              }
+            })()`,
+            true
+          );
+
+          const texts = JSON.parse(rawNodes) as string[];
+          if (texts.length > 0 && window.tesseraApi?.translateTexts) {
+            const translated = await window.tesseraApi.translateTexts(texts, 'pt');
+            const safePayload = JSON.stringify(translated);
+            await wv.executeJavaScript(
+              `(() => {
+                try {
+                  const translations = ${safePayload};
+                  document.querySelectorAll('[data-tessera-idx]').forEach(el => {
+                    const idx = parseInt(el.getAttribute('data-tessera-idx'), 10);
+                    if (!isNaN(idx) && translations[idx]) {
+                      el.innerText = translations[idx];
+                    }
+                  });
+                } catch {}
+              })()`,
+              true
+            );
+            return;
+          }
+        } catch (err) {
+          console.warn('[Tessera] CSP-resistant DOM translation fallback:', err);
+        }
         await wv.executeJavaScript(INLINE_DOM_TRANSLATE_SCRIPT, true).catch(() => {});
       },
       revertTranslateActivePage: async () => {
         const wv = getActiveWebview();
         if (!wv) return;
+        try {
+          await wv.executeJavaScript(
+            `(() => {
+              try {
+                document.querySelectorAll('[data-tessera-orig]').forEach(el => {
+                  const orig = el.getAttribute('data-tessera-orig');
+                  if (orig) el.innerText = orig;
+                  el.removeAttribute('data-tessera-orig');
+                  el.removeAttribute('data-tessera-idx');
+                });
+              } catch {}
+            })()`,
+            true
+          );
+        } catch {}
         await wv.executeJavaScript(REVERT_DOM_TRANSLATE_SCRIPT, true).catch(() => {});
       },
       exportActivePagePdf: async () => {
@@ -285,7 +387,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
             })()`,
             true
           );
-          onUpdateTab(targetId, { isPlayingMedia: isPlayingNow });
+          latestPropsRef.current.onUpdateTab(targetId, { isPlayingMedia: isPlayingNow });
           return isPlayingNow;
         } catch {
           return false;
@@ -299,7 +401,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
           const currentMuted = wv.isAudioMuted();
           const nextMuted = !currentMuted;
           wv.setAudioMuted(nextMuted);
-          onUpdateTab(targetId, { isMuted: nextMuted });
+          latestPropsRef.current.onUpdateTab(targetId, { isMuted: nextMuted });
         } catch {}
       },
       triggerPictureInPicture: async (tabId?: string) => {
@@ -308,19 +410,17 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         if (!wv) return false;
         try {
           return await wv.executeJavaScript<boolean>(
-            `(() => {
+            `(async () => {
               try {
                 if (document.pictureInPictureElement) {
-                  document.exitPictureInPicture().catch(() => {});
+                  await document.exitPictureInPicture();
                   return false;
                 }
                 const videos = Array.from(document.querySelectorAll('video'));
                 if (!videos.length) return false;
                 const target = videos.find(v => !v.paused && v.readyState >= 1) || videos[0];
                 if (target && target.requestPictureInPicture) {
-                  target.requestPictureInPicture().catch((e) => {
-                    console.warn('[Tessera] PiP request failed:', e);
-                  });
+                  await target.requestPictureInPicture();
                   return true;
                 }
               } catch (e) {
@@ -398,18 +498,24 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
 
     const attachWebviewListeners = (tab: BrowserTab, el: ElectronWebviewElement | null) => {
       const prev = webviewRefs.current[tab.id];
-      if (prev === el || !el) {
-        webviewRefs.current[tab.id] = el;
+      if (!el) {
+        if (prev) {
+          delete webviewRefs.current[tab.id];
+          delete darkCssKeys.current[tab.id];
+        }
+        return;
+      }
+      if (prev === el) {
         return;
       }
       webviewRefs.current[tab.id] = el;
 
       el.addEventListener('did-start-loading', () => {
-        onUpdateTab(tab.id, { isLoading: true, progress: 0.28 });
+        latestPropsRef.current.onUpdateTab(tab.id, { isLoading: true, progress: 0.28 });
       });
 
       el.addEventListener('did-stop-loading', () => {
-        onUpdateTab(tab.id, {
+        latestPropsRef.current.onUpdateTab(tab.id, {
           isLoading: false,
           progress: 1,
           canGoBack: el.canGoBack(),
@@ -423,7 +529,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
               const img = await el.capturePage();
               const thumb = img.toDataURL();
               if (thumb && thumb.length > 100) {
-                onUpdateTab(tab.id, { thumbnailDataUrl: thumb });
+                latestPropsRef.current.onUpdateTab(tab.id, { thumbnailDataUrl: thumb });
               }
             }
           } catch {
@@ -435,16 +541,16 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       el.addEventListener('new-window', (e: Event) => {
         const newWinEv = e as unknown as { url?: string };
         if (newWinEv.url && !newWinEv.url.startsWith('about:blank')) {
-          onOpenNewTab?.(newWinEv.url, tab.isIncognito);
+          latestPropsRef.current.onOpenNewTab?.(newWinEv.url, tab.isIncognito);
         }
       });
 
       el.addEventListener('media-started-playing', () => {
-        onUpdateTab(tab.id, { isPlayingMedia: true });
+        latestPropsRef.current.onUpdateTab(tab.id, { isPlayingMedia: true });
       });
 
       el.addEventListener('media-paused', () => {
-        onUpdateTab(tab.id, { isPlayingMedia: false });
+        latestPropsRef.current.onUpdateTab(tab.id, { isPlayingMedia: false });
       });
 
       el.addEventListener('did-navigate', (e: Event) => {
@@ -452,7 +558,16 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         initializedUrls.current[tab.id] = navEv.url;
         delete darkCssKeys.current[tab.id];
         setSelectionPopup(null);
-        onUpdateTab(tab.id, {
+
+        if (
+          navEv.url.includes('accounts.google.com') &&
+          (navEv.url.includes('rejected') || navEv.url.includes('7675428'))
+        ) {
+          const tabPartition = tab.isIncognito ? 'incognito_session' : `persist:${tab.spaceId}`;
+          void window.tesseraApi?.clearGoogleAuthCookies?.(tabPartition);
+        }
+
+        latestPropsRef.current.onUpdateTab(tab.id, {
           url: navEv.url,
           canGoBack: el.canGoBack(),
           canGoForward: el.canGoForward(),
@@ -464,7 +579,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         const navEv = e as unknown as { url: string; isMainFrame?: boolean };
         if (navEv.isMainFrame === false) return;
         initializedUrls.current[tab.id] = navEv.url;
-        onUpdateTab(tab.id, {
+        latestPropsRef.current.onUpdateTab(tab.id, {
           url: navEv.url,
           canGoBack: el.canGoBack(),
           canGoForward: el.canGoForward()
@@ -474,14 +589,14 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       el.addEventListener('page-title-updated', (e: Event) => {
         const titleEv = e as unknown as { title: string };
         const currentUrl = el.getURL() || tab.url;
-        onUpdateTab(tab.id, { title: titleEv.title || extractCleanHost(currentUrl) });
-        onRecordHistory(titleEv.title, currentUrl, tab.spaceId, tab.isIncognito);
+        latestPropsRef.current.onUpdateTab(tab.id, { title: titleEv.title || extractCleanHost(currentUrl) });
+        latestPropsRef.current.onRecordHistory(titleEv.title, currentUrl, tab.spaceId, tab.isIncognito);
       });
 
       el.addEventListener('page-favicon-updated', (e: Event) => {
         const favEv = e as unknown as { favicons?: string[] };
         if (favEv.favicons && favEv.favicons[0]) {
-          onUpdateTab(tab.id, { favicon: favEv.favicons[0] });
+          latestPropsRef.current.onUpdateTab(tab.id, { favicon: favEv.favicons[0] });
         }
       });
 
@@ -493,22 +608,22 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
 
           const currentUrl = el.getURL();
           if (isAuthProtectedUrl(currentUrl)) {
-            if (tab.id === activeTabId) {
-              onReaderAvailabilityChanged(false);
+            if (tab.id === latestPropsRef.current.activeTabId) {
+              latestPropsRef.current.onReaderAvailabilityChanged(false);
             }
             return;
           }
 
-          if (settings.forceDarkPages) {
+          if (latestPropsRef.current.settings.forceDarkPages) {
             void applyForceDarkToWebview(tab.id, el, true);
           }
 
           const host = extractCleanHost(currentUrl);
-          const whitelisted = siteSettings[host]?.adBlockWhitelisted;
-          if (settings.adBlockEnabled && !whitelisted) {
+          const whitelisted = latestPropsRef.current.siteSettings[host]?.adBlockWhitelisted;
+          if (latestPropsRef.current.settings.adBlockEnabled && !whitelisted) {
             void el.executeJavaScript(COSMETIC_ADBLOCK_SCRIPT).catch(() => {});
           }
-          if (settings.cookieBlockerEnabled) {
+          if (latestPropsRef.current.settings.cookieBlockerEnabled) {
             void el.executeJavaScript(COOKIE_BANNER_BLOCKER_SCRIPT).catch(() => {});
           }
 
@@ -520,14 +635,14 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
                 themeColor: string;
                 readerAvailable: boolean;
               };
-              if (tab.id === activeTabId) {
-                onReaderAvailabilityChanged(meta.readerAvailable);
+              if (tab.id === latestPropsRef.current.activeTabId) {
+                latestPropsRef.current.onReaderAvailabilityChanged(meta.readerAvailable);
                 if (meta.lang && !meta.lang.startsWith('pt')) {
-                  onForeignLanguageDetected(meta.lang);
+                  latestPropsRef.current.onForeignLanguageDetected(meta.lang);
                 }
               }
               if (meta.themeColor) {
-                onUpdateTab(tab.id, { themeColor: meta.themeColor });
+                latestPropsRef.current.onUpdateTab(tab.id, { themeColor: meta.themeColor });
               }
             })
             .catch(() => {});
@@ -560,7 +675,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
           result?: { activeMatchOrdinal?: number; matches?: number };
         };
         if (foundEv.result) {
-          onFindMatchesUpdated(
+          latestPropsRef.current.onFindMatchesUpdated(
             foundEv.result.activeMatchOrdinal ?? 0,
             foundEv.result.matches ?? 0
           );
@@ -573,19 +688,19 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
           const payload = ipcEv.args?.[0] as { deltaY: number; scrollY: number } | undefined;
           if (!payload) return;
           if (payload.scrollY < 40) {
-            onScrollDirection(false);
+            latestPropsRef.current.onScrollDirection(false);
           } else if (payload.deltaY > 18) {
-            onScrollDirection(true);
+            latestPropsRef.current.onScrollDirection(true);
           } else if (payload.deltaY < -14) {
-            onScrollDirection(false);
+            latestPropsRef.current.onScrollDirection(false);
           }
         } else if (ipcEv.channel === 'tessera-guest:peek-link') {
           const payload = ipcEv.args?.[0] as { url: string; title: string } | undefined;
           if (payload?.url) {
-            onPeekLink(payload.url, payload.title);
+            latestPropsRef.current.onPeekLink(payload.url, payload.title);
           }
         } else if (ipcEv.channel === 'tessera-guest:text-selected') {
-          if (!settings.tesseraAiEnabled || !settings.aiTextHighlightPrompts) return;
+          if (!latestPropsRef.current.settings.tesseraAiEnabled || !latestPropsRef.current.settings.aiTextHighlightPrompts) return;
           const payload = ipcEv.args?.[0] as
             | { text: string; clientX: number; clientY: number }
             | undefined;
@@ -604,7 +719,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       el.addEventListener('context-menu', (e: Event) => {
         e.preventDefault();
         const p = (e as unknown as { params?: any }).params || {};
-        onShowContextMenu?.({
+        latestPropsRef.current.onShowContextMenu?.({
           x: p.x ?? 0,
           y: p.y ?? 0,
           linkURL: p.linkURL,
@@ -622,15 +737,17 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       });
 
       el.addEventListener('enter-html-full-screen', () => {
-        onHtmlFullScreenChange?.(true);
+        latestPropsRef.current.onHtmlFullScreenChange?.(true);
       });
 
       el.addEventListener('leave-html-full-screen', () => {
-        onHtmlFullScreenChange?.(false);
+        latestPropsRef.current.onHtmlFullScreenChange?.(false);
       });
     };
 
-    const webTabs = tabs.filter((t) => !t.isHomePage);
+    // Keep tabs mounted in webview pool if they have active web content or were already initialized,
+    // preventing DOM destruction and loss of navigation history when visiting Home.
+    const webTabs = tabs.filter((t) => !t.isHomePage || !!initializedUrls.current[t.id]);
 
     return (
       <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -762,7 +879,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
           >
             <button
               onClick={() => {
-                onAskAiWithSelection(selectionPopup.text, 'explain');
+                latestPropsRef.current.onAskAiWithSelection(selectionPopup.text, 'explain');
                 setSelectionPopup(null);
               }}
               style={selChipStyle}
@@ -772,7 +889,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
             </button>
             <button
               onClick={() => {
-                onAskAiWithSelection(selectionPopup.text, 'summarize');
+                latestPropsRef.current.onAskAiWithSelection(selectionPopup.text, 'summarize');
                 setSelectionPopup(null);
               }}
               style={selChipStyle}
@@ -781,7 +898,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
             </button>
             <button
               onClick={() => {
-                onListenSelection(selectionPopup.text);
+                latestPropsRef.current.onListenSelection(selectionPopup.text);
                 setSelectionPopup(null);
               }}
               title="Ouvir trecho com Podcastify"

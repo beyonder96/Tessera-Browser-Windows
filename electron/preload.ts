@@ -65,6 +65,7 @@ export interface TesseraDesktopApi {
   syncGetInfo: () => Promise<{
     deviceId: string;
     deviceName: string;
+    ip: string;
     port: number;
     pairingSecret: string;
     isRunning: boolean;
@@ -73,6 +74,8 @@ export interface TesseraDesktopApi {
   syncStop: () => Promise<void>;
   syncSendTabToMobile: (url: string, title?: string) => Promise<boolean>;
   syncGetConnectedMobile: () => Promise<{ deviceName: string; platform: string; lastSeen: number; ip?: string } | null>;
+  pinHash: (pin: string) => Promise<string>;
+  pinVerify: (candidatePin: string, storedHash: string) => Promise<boolean>;
   checkOnboardingNeeded: () => Promise<boolean>;
   completeOnboarding: () => Promise<boolean>;
   getInstalledBrowsers: () => Promise<
@@ -87,7 +90,9 @@ export interface TesseraDesktopApi {
     }>
   >;
   importBrowserBookmarks: (browserId: 'chrome' | 'edge') => Promise<{ count: number }>;
+  translateTexts: (texts: string[], targetLang?: string) => Promise<string[]>;
   getGoogleAccountStatus: () => Promise<{ isAuthenticated: boolean; email?: string }>;
+  clearGoogleAuthCookies: (partitionName?: string) => Promise<{ success: boolean }>;
   checkForUpdates: () => Promise<{ success: boolean; error?: string }>;
   quitAndInstallUpdate: () => Promise<void>;
   getUpdateStatus: () => Promise<{ status: string; version?: string; releaseNotes?: string; error?: string }>;
@@ -152,11 +157,15 @@ const api: TesseraDesktopApi = {
   syncStop: () => ipcRenderer.invoke('tessera:sync-stop'),
   syncSendTabToMobile: (url, title) => ipcRenderer.invoke('tessera:sync-send-tab-to-mobile', url, title),
   syncGetConnectedMobile: () => ipcRenderer.invoke('tessera:sync-connected-mobile'),
+  pinHash: (pin) => ipcRenderer.invoke('tessera:pin-hash', pin),
+  pinVerify: (candidatePin, storedHash) => ipcRenderer.invoke('tessera:pin-verify', candidatePin, storedHash),
   checkOnboardingNeeded: () => ipcRenderer.invoke('tessera:check-onboarding-needed'),
   completeOnboarding: () => ipcRenderer.invoke('tessera:complete-onboarding'),
   getInstalledBrowsers: () => ipcRenderer.invoke('tessera:get-installed-browsers'),
   importBrowserBookmarks: (browserId) => ipcRenderer.invoke('tessera:import-browser-bookmarks', browserId),
+  translateTexts: (texts, targetLang) => ipcRenderer.invoke('tessera:translate-texts', texts, targetLang),
   getGoogleAccountStatus: () => ipcRenderer.invoke('tessera:get-google-account-status'),
+  clearGoogleAuthCookies: (partitionName) => ipcRenderer.invoke('tessera:clear-google-auth-cookies', partitionName),
   checkForUpdates: () => ipcRenderer.invoke('tessera:check-for-updates'),
   quitAndInstallUpdate: () => ipcRenderer.invoke('tessera:quit-and-install-update'),
   getUpdateStatus: () => ipcRenderer.invoke('tessera:get-update-status'),

@@ -75,6 +75,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           version: 2,
           deviceId: info.deviceId,
           deviceName: info.deviceName,
+          ip: info.ip || '127.0.0.1',
           port: info.port,
           secret: info.pairingSecret
         });

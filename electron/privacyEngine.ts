@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { session, type BrowserWindow } from 'electron';
 import {
   BYTES_PER_BLOCKED_REQUEST,
@@ -28,9 +30,161 @@ export function isAuthProtectedHostname(hostname: string): boolean {
   return h.endsWith('.accounts.google.com') || h.endsWith('.gstatic.com');
 }
 
+export function isGoogleAuthHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().trim();
+  if (!h) return false;
+  return (
+    h === 'accounts.google.com' ||
+    h.endsWith('.accounts.google.com') ||
+    h === 'accounts.youtube.com' ||
+    h.endsWith('.accounts.youtube.com') ||
+    h === 'myaccount.google.com' ||
+    h === 'oauth2.googleapis.com' ||
+    h === 'apis.google.com' ||
+    h === 'gstatic.com' ||
+    h.endsWith('.gstatic.com') ||
+    h === 'google.com' ||
+    h === 'googleapis.com' ||
+    h.endsWith('.googleapis.com') ||
+    h === 'google.com' ||
+    h.endsWith('.google.com') ||
+    h === 'youtube.com' ||
+    h.endsWith('.youtube.com')
+  );
+}
+
 export function getStandardChromiumUserAgent(): string {
   const chromeMajor = (process.versions.chrome || '132.0.0.0').split('.')[0];
   return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
+}
+
+export function buildChromeMainWorldCompatScript(chromeMajor: string, chromeFull: string): string {
+  return `(function() {
+    try {
+      const major = ${JSON.stringify(chromeMajor)};
+      const full = ${JSON.stringify(chromeFull)};
+      const brandList = [
+        { brand: "Not A(Brand", version: "8" },
+        { brand: "Chromium", version: major },
+        { brand: "Google Chrome", version: major }
+      ];
+      const fullBrandList = [
+        { brand: "Not A(Brand", version: "8.0.0.0" },
+        { brand: "Chromium", version: full },
+        { brand: "Google Chrome", version: full }
+      ];
+
+      if (navigator.userAgentData) {
+        const proto = Object.getPrototypeOf(navigator.userAgentData);
+        if (proto) {
+          Object.defineProperty(proto, 'brands', {
+            get: function() { return brandList; },
+            configurable: true,
+            enumerable: true
+          });
+          Object.defineProperty(proto, 'mobile', {
+            get: function() { return false; },
+            configurable: true,
+            enumerable: true
+          });
+          Object.defineProperty(proto, 'platform', {
+            get: function() { return "Windows"; },
+            configurable: true,
+            enumerable: true
+          });
+          proto.getHighEntropyValues = async function(hints) {
+            const highEntropy = {
+              architecture: "x86",
+              bitness: "64",
+              brands: brandList,
+              formFactors: ["Desktop"],
+              fullVersionList: fullBrandList,
+              mobile: false,
+              model: "",
+              platform: "Windows",
+              platformVersion: "15.0.0",
+              uaFullVersion: full,
+              wow64: false
+            };
+            const out = {};
+            if (Array.isArray(hints)) {
+              for (let i = 0; i < hints.length; i++) {
+                const h = hints[i];
+                if (h in highEntropy) out[h] = highEntropy[h];
+              }
+            }
+            return out;
+          };
+          proto.toJSON = function() {
+            return { brands: brandList, mobile: false, platform: "Windows" };
+          };
+        }
+      }
+
+      if (navigator.webdriver) {
+        Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
+          get: function() { return false; },
+          configurable: true,
+          enumerable: true
+        });
+      }
+
+      if (typeof window.chrome !== 'object' || !window.chrome) {
+        window.chrome = {};
+      }
+      if (!window.chrome.app) {
+        window.chrome.app = {
+          isInstalled: false,
+          InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+          RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' }
+        };
+      }
+      if (!window.chrome.csi) {
+        window.chrome.csi = function() {
+          return { startE: Date.now(), onloadT: Date.now(), pageT: performance.now(), tran: 15 };
+        };
+      }
+      if (!window.chrome.loadTimes) {
+        window.chrome.loadTimes = function() {
+          const nowSec = Date.now() / 1000;
+          return {
+            requestTime: nowSec,
+            startLoadTime: nowSec,
+            commitLoadTime: nowSec,
+            finishDocumentLoadTime: nowSec,
+            finishLoadTime: nowSec,
+            firstPaintTime: nowSec,
+            firstPaintAfterLoadTime: 0,
+            navigationType: 'Other',
+            wasFetchedViaSpdy: true,
+            wasNpnNegotiated: true,
+            npnNegotiatedProtocol: 'h2',
+            wasAlternateProtocolAvailable: false,
+            connectionInfo: 'h2'
+          };
+        };
+      }
+    } catch (e) {}
+  })();`;
+}
+
+export function buildChromeClientHintHeaders(chromeMajor: string, chromeFull: string, includeHighEntropy: boolean): Record<string, string> {
+  const base: Record<string, string> = {
+    'sec-ch-ua': `"Not A(Brand";v="8", "Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}"`,
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"'
+  };
+  if (includeHighEntropy) {
+    base['sec-ch-ua-arch'] = '"x86"';
+    base['sec-ch-ua-bitness'] = '"64"';
+    base['sec-ch-ua-full-version'] = `"${chromeFull}"`;
+    base['sec-ch-ua-full-version-list'] = `"Not A(Brand";v="8.0.0.0", "Chromium";v="${chromeFull}", "Google Chrome";v="${chromeFull}"`;
+    base['sec-ch-ua-model'] = '""';
+    base['sec-ch-ua-wow64'] = '?0';
+    base['sec-ch-ua-form-factors'] = '"Desktop"';
+    base['sec-ch-ua-platform-version'] = '"15.0.0"';
+  }
+  return base;
 }
 
 export interface BlockedRequestPayload {
@@ -46,11 +200,57 @@ export interface BlockedRequestPayload {
 export class PrivacyShieldController {
   private adBlockEnabled = true;
   private siteSettingsMap: Record<string, SiteSettings> = {};
-  private configuredPartitions = new Set<string>();
+  private configuredPartitions = new Map<string, Promise<void>>();
   private getMainWindow: () => BrowserWindow | null;
+  private userDataDir?: string;
+  private preparedCompatExtDir: string | null = null;
 
-  constructor(getMainWindow: () => BrowserWindow | null) {
+  constructor(getMainWindow: () => BrowserWindow | null, userDataDir?: string) {
     this.getMainWindow = getMainWindow;
+    this.userDataDir = userDataDir;
+  }
+
+  private ensureChromeCompatExtensionDir(): string | null {
+    if (this.preparedCompatExtDir) return this.preparedCompatExtDir;
+    if (!this.userDataDir) return null;
+    try {
+      const chromeMajor = (process.versions.chrome || '132.0.0.0').split('.')[0];
+      const chromeFull = process.versions.chrome || `${chromeMajor}.0.0.0`;
+      const extDir = path.join(this.userDataDir, 'chrome-compat-ext');
+      fs.mkdirSync(extDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(extDir, 'manifest.json'),
+        JSON.stringify(
+          {
+            manifest_version: 3,
+            name: 'Chromium Web Compatibility',
+            version: '1.0.4',
+            content_scripts: [
+              {
+                matches: ['<all_urls>'],
+                js: ['compat.js'],
+                run_at: 'document_start',
+                all_frames: true,
+                match_about_blank: true,
+                world: 'MAIN'
+              }
+            ]
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(extDir, 'compat.js'),
+        buildChromeMainWorldCompatScript(chromeMajor, chromeFull),
+        'utf8'
+      );
+      this.preparedCompatExtDir = extDir;
+      return extDir;
+    } catch {
+      return null;
+    }
   }
 
   updateConfig(adBlockEnabled: boolean, siteSettings: Record<string, SiteSettings>): void {
@@ -58,7 +258,7 @@ export class PrivacyShieldController {
     this.siteSettingsMap = siteSettings || {};
   }
 
-  private async sanitizeUnauthenticatedGoogleRejectionCookies(ses: Electron.Session): Promise<void> {
+  public async sanitizeUnauthenticatedGoogleRejectionCookies(ses: Electron.Session): Promise<void> {
     try {
       const googleCookies = await ses.cookies.get({ domain: 'google.com' });
       const authCookieNames = new Set([
@@ -73,6 +273,24 @@ export class PrivacyShieldController {
         return;
       }
 
+      // Clear poisoned origin storage (cookies, localStorage, IndexedDB, ServiceWorkers) on accounts.google.com
+      await ses.clearStorageData({ origin: 'https://accounts.google.com' }).catch(() => {});
+
+      // Remove poisoned rejection / tracking cookies (such as GAPS, __Host-GAPS, OTZ, NID, ACCOUNT_CHOOSER)
+      for (const cookie of googleCookies) {
+        if (
+          cookie.name === 'GAPS' ||
+          cookie.name.startsWith('__Host-GAPS') ||
+          cookie.name === 'OTZ' ||
+          cookie.name === 'NID' ||
+          cookie.name === 'ACCOUNT_CHOOSER'
+        ) {
+          const cleanDomain = (cookie.domain || 'google.com').replace(/^\./, '');
+          const cookieUrl = `https://${cleanDomain}${cookie.path || '/'}`;
+          await ses.cookies.remove(cookieUrl, cookie.name).catch(() => {});
+        }
+      }
+
       const accountCookies = await ses.cookies.get({ domain: 'accounts.google.com' });
       for (const cookie of accountCookies) {
         const cleanDomain = (cookie.domain || 'accounts.google.com').replace(/^\./, '');
@@ -84,9 +302,12 @@ export class PrivacyShieldController {
     }
   }
 
-  ensurePartitionConfigured(partitionName: string, onDownloadAttach?: (ses: Electron.Session) => void): void {
-    if (this.configuredPartitions.has(partitionName)) return;
-    this.configuredPartitions.add(partitionName);
+  ensurePartitionConfigured(
+    partitionName: string,
+    onDownloadAttach?: (ses: Electron.Session) => void
+  ): Promise<void> {
+    const existing = this.configuredPartitions.get(partitionName);
+    if (existing) return existing;
 
     const ses = partitionName === 'default' ? session.defaultSession : session.fromPartition(partitionName);
 
@@ -94,7 +315,6 @@ export class PrivacyShieldController {
     // Eliminates "Electron" / "Tessera" wrapper tokens and version mismatches so Google Sign-In, WhatsApp Web & banks work 100%
     const standardChromeUa = getStandardChromiumUserAgent();
     ses.setUserAgent(standardChromeUa);
-    void this.sanitizeUnauthenticatedGoogleRejectionCookies(ses);
 
     // Web Permissions Protocol Handler (Camera, Mic, Geo, Notifications, Clipboard, Storage Access / OAuth)
     ses.setPermissionRequestHandler((wc, permission, callback, details) => {
@@ -258,9 +478,73 @@ export class PrivacyShieldController {
       callback({ cancel: false });
     });
 
+    const chromeMajor = (process.versions.chrome || '132.0.0.0').split('.')[0];
+    const chromeFull = process.versions.chrome || `${chromeMajor}.0.0.0`;
+
+    // Align Google Client Hints (including all 11 Accept-CH headers) and User-Agent headers
+    // so Google Sign-In, OAuth2 popups, YouTube, Gmail & SSO services verify authentic Chrome identity
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      try {
+        const reqUrl = new URL(details.url);
+        if (reqUrl.protocol === 'https:' || reqUrl.protocol === 'http:') {
+          const host = reqUrl.hostname.toLowerCase();
+          const isLocal = host === 'localhost' || host === '127.0.0.1';
+          if (!isLocal) {
+            const headers = details.requestHeaders;
+            const includeHighEntropy = isGoogleAuthHost(host) || isAuthProtectedHostname(host);
+            const chHeaders = buildChromeClientHintHeaders(chromeMajor, chromeFull, includeHighEntropy);
+
+            for (const key of Object.keys(headers)) {
+              const lower = key.toLowerCase();
+              if (lower === 'user-agent' || lower.startsWith('sec-ch-ua')) {
+                delete headers[key];
+              }
+            }
+
+            headers['User-Agent'] = standardChromeUa;
+            for (const [hk, hv] of Object.entries(chHeaders)) {
+              headers[hk] = hv;
+            }
+
+            callback({ requestHeaders: headers });
+            return;
+          }
+        }
+      } catch {
+        // Fallback on invalid URL
+      }
+      callback({ requestHeaders: details.requestHeaders });
+    });
+
+    // Auto-wipe rejection cookies if Google redirects to the rejection/help page
+    ses.webRequest.onResponseStarted((details) => {
+      try {
+        if (
+          details.url.includes('accounts.google.com') &&
+          (details.url.includes('rejected') || details.url.includes('7675428'))
+        ) {
+          void this.sanitizeUnauthenticatedGoogleRejectionCookies(ses);
+        }
+      } catch {}
+    });
+
     if (onDownloadAttach) {
       onDownloadAttach(ses);
     }
+
+    const isPersistentSession = partitionName === 'default' || partitionName.startsWith('persist:');
+    const initPromise = (async () => {
+      await this.sanitizeUnauthenticatedGoogleRejectionCookies(ses);
+      if (isPersistentSession) {
+        const extDir = this.ensureChromeCompatExtensionDir();
+        if (extDir && typeof ses.loadExtension === 'function') {
+          await ses.loadExtension(extDir, { allowFileAccess: false }).catch(() => {});
+        }
+      }
+    })();
+
+    this.configuredPartitions.set(partitionName, initPromise);
+    return initPromise;
   }
 
   async clearIncognitoPartition(partitionName: string): Promise<void> {

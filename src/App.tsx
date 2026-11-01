@@ -776,6 +776,20 @@ export const App: React.FC = () => {
             webStageRef.current?.reload();
           }
           break;
+        case 'go-back':
+          if (activeTab?.canGoBack) {
+            webStageRef.current?.goBack();
+          } else if (activeTab && !activeTab.isHomePage) {
+            updateTab(activeTab.id, { isHomePage: true, title: 'Início' });
+          }
+          break;
+        case 'go-forward':
+          if (activeTab?.isHomePage && activeTab.url && activeTab.url !== 'https://www.google.com') {
+            updateTab(activeTab.id, { isHomePage: false, title: extractCleanHost(activeTab.url) });
+          } else {
+            webStageRef.current?.goForward();
+          }
+          break;
         case 'devtools':
           void webStageRef.current?.openActiveDevTools();
           break;
@@ -916,10 +930,10 @@ export const App: React.FC = () => {
         executeShortcutAction('voice-activate');
       } else if (e.altKey && e.key === 'ArrowLeft') {
         e.preventDefault();
-        webStageRef.current?.goBack();
+        executeShortcutAction('go-back');
       } else if (e.altKey && e.key === 'ArrowRight') {
         e.preventDefault();
-        webStageRef.current?.goForward();
+        executeShortcutAction('go-forward');
       } else if (e.altKey && key === 'r') {
         e.preventDefault();
         executeShortcutAction('reader-mode');
@@ -1200,7 +1214,13 @@ export const App: React.FC = () => {
               updateTab(activeTab.id, { isHomePage: true, title: 'Início' });
             }
           }}
-          onForward={() => webStageRef.current?.goForward()}
+          onForward={() => {
+            if (activeTab.isHomePage && activeTab.url && activeTab.url !== 'https://www.google.com') {
+              updateTab(activeTab.id, { isHomePage: false, title: extractCleanHost(activeTab.url) });
+            } else {
+              webStageRef.current?.goForward();
+            }
+          }}
           onReload={() => webStageRef.current?.reload()}
           onStopLoading={() => webStageRef.current?.stop()}
           onGoHome={() => updateTab(activeTab.id, { isHomePage: true, title: 'Início' })}
@@ -1437,9 +1457,9 @@ export const App: React.FC = () => {
         onTogglePinTab={(id) =>
           setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, isPinned: !t.isPinned } : t)))
         }
-        onToggleMuteTab={(id) =>
-          setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, isMuted: !t.isMuted } : t)))
-        }
+        onToggleMuteTab={(id) => {
+          webStageRef.current?.toggleMediaMute(id);
+        }}
         onGroupTabs={groupTabsTogether}
         onAssignTabToGroup={(tabId, groupId) => updateTab(tabId, { groupId })}
         onDeleteGroup={(groupId) => {
@@ -1575,6 +1595,12 @@ export const App: React.FC = () => {
             };
             setTabs((prev) => [...prev, incogTab]);
             setActiveTabId(incogTab.id);
+            if (!isIncognitoMode) {
+              setIsIncognitoMode(true);
+              if (settings.incognitoPinLockEnabled && settings.incognitoPinHash) {
+                setIsIncognitoLocked(true);
+              }
+            }
           }}
           onPeekLink={(url, title) => setPeekTarget({ url, title })}
           onSendTabToMobile={(url, title) => {

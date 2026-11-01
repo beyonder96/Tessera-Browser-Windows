@@ -56,7 +56,8 @@
       "dist-electron/**/*"
     ],
     "asarUnpack": [
-      "dist-electron/webview-preload.cjs"
+      "dist-electron/webview-preload.cjs",
+      "node_modules/@libsql/**/*"
     ],
     "protocols": [
       {

@@ -231,10 +231,10 @@ export class TesseraAiService {
     messages: AiChatMessage[]
   ): Promise<string> {
     const modelsToTry = [
-      'gemini-3.8-flash',
-      'gemini-3.5-flash',
-      'gemini-3.5-flash-lite',
-      'gemini-3.6-flash'
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-3.8-flash'
     ];
     let lastError = 'Modelo Gemini indisponível.';
 
@@ -265,8 +265,7 @@ export class TesseraAiService {
         body: JSON.stringify({
           contents,
           generationConfig: {
-            temperature: 0.4,
-            maxOutputTokens: 1024
+            maxOutputTokens: 2048
           }
         })
       });

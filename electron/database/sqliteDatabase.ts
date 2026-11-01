@@ -1,5 +1,6 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { createClient, type Client } from '@libsql/client';
 import type {
   BrowserSpace,
@@ -12,8 +13,7 @@ import type {
   SiteSettings,
   SpeedDialItem,
   TabGroup,
-  TesseraAndroidCompatibleBackup,
-  TrackerCategory
+  TesseraAndroidCompatibleBackup
 } from '../../src/shared/types';
 import { argbToHex, DEFAULT_SETTINGS, DEFAULT_SPACES, DEFAULT_SPEED_DIAL, hexToArgb } from '../../src/shared/wallpapers';
 import { normalizeSearchEngineId } from '../../src/shared/searchEngines';
@@ -24,20 +24,40 @@ export class SqliteDatabase {
   private readonly dbPath: string;
   private readonly assetStore: AssetStore;
   private isInitialized = false;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(userDataDir: string, assetStore: AssetStore) {
     this.assetStore = assetStore;
     this.dbPath = path.join(userDataDir, 'tessera.db');
-    // Using file protocol for local SQLite database
-    const fileUrl = `file:${this.dbPath.replace(/\\/g, '/')}`;
+    // Using standard RFC file URL for local SQLite database
+    const fileUrl = pathToFileURL(this.dbPath).href;
     this.client = createClient({ url: fileUrl });
+  }
+
+  /**
+   * Mutex to serialize all write transactions and prevent SQLITE_BUSY concurrency conflicts.
+   */
+  private async runInWriteQueue<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.writeQueue.then(operation, operation);
+    this.writeQueue = next.then(
+      () => {},
+      () => {}
+    );
+    return next;
   }
 
   async init(): Promise<void> {
     if (this.isInitialized) return;
 
-    // Pragmas
+    // Pragmas: WAL mode and timeouts for responsive multi-threaded and asynchronous access
     await this.client.execute('PRAGMA foreign_keys = ON;');
+    try {
+      await this.client.execute('PRAGMA journal_mode = WAL;');
+      await this.client.execute('PRAGMA busy_timeout = 5000;');
+      await this.client.execute('PRAGMA synchronous = NORMAL;');
+    } catch (pragmaErr) {
+      console.warn('[SqliteDatabase] WAL pragma setup note:', pragmaErr);
+    }
 
     // Schema Migrations table
     await this.client.execute(`
@@ -107,11 +127,18 @@ export class SqliteDatabase {
         icon_asset TEXT,
         badge_color_hex TEXT NOT NULL,
         badge_color INTEGER NOT NULL,
+        space_id TEXT,
         is_speed_dial INTEGER NOT NULL DEFAULT 1,
         sort_order INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       );
     `);
+
+    try {
+      await this.client.execute('ALTER TABLE bookmarks ADD COLUMN space_id TEXT;');
+    } catch {
+      // Column already exists
+    }
 
     // History (with unique URL for visit counting and deduplication)
     await this.client.execute(`
@@ -247,7 +274,6 @@ export class SqliteDatabase {
           content_rowid=id
         );
       `);
-
       await this.client.execute(`
         CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
           INSERT INTO history_fts(rowid, title, url) VALUES (new.id, new.title, new.url);
@@ -273,7 +299,6 @@ export class SqliteDatabase {
           content_rowid=rowid
         );
       `);
-
       await this.client.execute(`
         CREATE TRIGGER IF NOT EXISTS bookmarks_ai AFTER INSERT ON bookmarks BEGIN
           INSERT INTO bookmarks_fts(rowid, title, url) VALUES (new.rowid, new.title, new.url);
@@ -319,15 +344,17 @@ export class SqliteDatabase {
   }
 
   async setOnboardingCompleted(completed: boolean = true): Promise<void> {
-    await this.init();
-    const now = Date.now();
-    await this.client.execute({
-      sql: `INSERT INTO app_state (id, active_space_id, active_tab_id, settings_json, has_completed_onboarding, updated_at)
-            VALUES (1, 'space_general', 'default-tab', '{}', ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              has_completed_onboarding = excluded.has_completed_onboarding,
-              updated_at = excluded.updated_at;`,
-      args: [completed ? 1 : 0, now]
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      const now = Date.now();
+      await this.client.execute({
+        sql: `INSERT INTO app_state (id, active_space_id, active_tab_id, settings_json, has_completed_onboarding, updated_at)
+              VALUES (1, 'space_general', 'default-tab', '{}', ?, ?)
+              ON CONFLICT(id) DO UPDATE SET
+                has_completed_onboarding = excluded.has_completed_onboarding,
+                updated_at = excluded.updated_at;`,
+        args: [completed ? 1 : 0, now]
+      });
     });
   }
 
@@ -353,6 +380,16 @@ export class SqliteDatabase {
         settings = { ...DEFAULT_SETTINGS, ...parsedSettings };
       } catch {
         // use default
+      }
+    }
+
+    // Hydrate custom wallpaper if stored as relative path
+    if (settings.customWallpaperDataUrl && !settings.customWallpaperDataUrl.startsWith('data:')) {
+      const hydratedUrl = this.assetStore.getCustomWallpaperDataUrl(settings.customWallpaperDataUrl);
+      if (hydratedUrl) {
+        settings.customWallpaperDataUrl = hydratedUrl;
+      } else {
+        settings.customWallpaperDataUrl = null;
       }
     }
 
@@ -411,7 +448,8 @@ export class SqliteDatabase {
       url: String(r.url),
       iconAsset: r.icon_asset ? String(r.icon_asset) : undefined,
       badgeColorHex: String(r.badge_color_hex),
-      badgeColor: Number(r.badge_color)
+      badgeColor: Number(r.badge_color),
+      spaceId: r.space_id ? String(r.space_id) : undefined
     }));
 
     // Load History (un-truncated, ordered by timestamp desc)
@@ -539,236 +577,305 @@ export class SqliteDatabase {
   }
 
   async saveFullState(state: PersistedAppState): Promise<void> {
-    await this.init();
-    const now = Date.now();
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      const now = Date.now();
 
-    // Clean up thumbnails for closed tabs
-    const activeTabIds = state.tabs.map((t) => t.id);
-    this.assetStore.cleanOrphanThumbnails(activeTabIds);
+      // Clean up thumbnails for closed tabs
+      const activeTabIds = state.tabs.map((t) => t.id);
+      this.assetStore.cleanOrphanThumbnails(activeTabIds);
 
-    // Handle custom wallpaper extraction if it's a data URL
-    let settingsToSave = { ...state.settings };
-    if (settingsToSave.customWallpaperDataUrl?.startsWith('data:image')) {
-      const relPath = this.assetStore.saveCustomWallpaper(settingsToSave.customWallpaperDataUrl);
-      if (relPath) {
-        settingsToSave.customWallpaperDataUrl = relPath;
-      }
-    }
-
-    const batchStatements: Array<{ sql: string; args: any[] }> = [];
-
-    // 1. App State
-    batchStatements.push({
-      sql: `INSERT INTO app_state (id, active_space_id, active_tab_id, settings_json, has_completed_onboarding, updated_at)
-            VALUES (1, ?, ?, ?, 1, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              active_space_id = excluded.active_space_id,
-              active_tab_id = excluded.active_tab_id,
-              settings_json = excluded.settings_json,
-              updated_at = excluded.updated_at;`,
-      args: [state.activeSpaceId, state.activeTabId, JSON.stringify(settingsToSave), now]
-    });
-
-    // 2. Spaces (Replace all)
-    batchStatements.push({ sql: 'DELETE FROM spaces;', args: [] });
-    state.spaces.forEach((s, idx) => {
-      batchStatements.push({
-        sql: `INSERT INTO spaces (id, name, icon_emoji, color_hex, color_argb, is_default, sort_order, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-        args: [s.id, s.name, s.iconEmoji, s.colorHex, s.colorArgb ?? hexToArgb(s.colorHex), s.isDefault ? 1 : 0, idx, now]
-      });
-    });
-
-    // 3. Tab Groups
-    batchStatements.push({ sql: 'DELETE FROM tab_groups;', args: [] });
-    state.tabGroups.forEach((g) => {
-      batchStatements.push({
-        sql: `INSERT INTO tab_groups (id, name, color_hex, space_id, updated_at)
-              VALUES (?, ?, ?, ?, ?);`,
-        args: [g.id, g.name, g.colorHex, g.spaceId, now]
-      });
-    });
-
-    // 4. Tabs (excluding incognito)
-    batchStatements.push({ sql: 'DELETE FROM tabs;', args: [] });
-    state.tabs
-      .filter((t) => !t.isIncognito)
-      .forEach((t, idx) => {
-        let thumbnailRelPath: string | null = null;
-        if (t.thumbnailDataUrl) {
-          thumbnailRelPath = this.assetStore.saveThumbnail(t.id, t.thumbnailDataUrl);
+      // Handle custom wallpaper extraction if it's a data URL
+      let settingsToSave = { ...state.settings };
+      if (settingsToSave.customWallpaperDataUrl?.startsWith('data:image')) {
+        const relPath = this.assetStore.saveCustomWallpaper(settingsToSave.customWallpaperDataUrl);
+        if (relPath) {
+          settingsToSave.customWallpaperDataUrl = relPath;
         }
+      }
+
+      const batchStatements: Array<{ sql: string; args: any[] }> = [];
+
+      // 1. App State
+      batchStatements.push({
+        sql: `INSERT INTO app_state (id, active_space_id, active_tab_id, settings_json, has_completed_onboarding, updated_at)
+              VALUES (1, ?, ?, ?, 1, ?)
+              ON CONFLICT(id) DO UPDATE SET
+                active_space_id = excluded.active_space_id,
+                active_tab_id = excluded.active_tab_id,
+                settings_json = excluded.settings_json,
+                updated_at = excluded.updated_at;`,
+        args: [state.activeSpaceId, state.activeTabId, JSON.stringify(settingsToSave), now]
+      });
+
+      // 2. Spaces (Replace all)
+      batchStatements.push({ sql: 'DELETE FROM spaces;', args: [] });
+      state.spaces.forEach((s, idx) => {
         batchStatements.push({
-          sql: `INSERT INTO tabs (
-            id, space_id, group_id, url, title, favicon, is_home_page,
-            can_go_back, can_go_forward, is_pinned, is_muted, is_playing_media,
-            is_incognito, theme_color, thumbnail_rel_path, last_accessed_timestamp, sort_order
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?);`,
+          sql: `INSERT INTO spaces (id, name, icon_emoji, color_hex, color_argb, is_default, sort_order, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+          args: [s.id, s.name, s.iconEmoji, s.colorHex, s.colorArgb ?? hexToArgb(s.colorHex), s.isDefault ? 1 : 0, idx, now]
+        });
+      });
+
+      // 3. Tab Groups (Replace all)
+      batchStatements.push({ sql: 'DELETE FROM tab_groups;', args: [] });
+      state.tabGroups.forEach((g) => {
+        batchStatements.push({
+          sql: `INSERT INTO tab_groups (id, name, color_hex, space_id, updated_at)
+                VALUES (?, ?, ?, ?, ?);`,
+          args: [g.id, g.name, g.colorHex, g.spaceId, now]
+        });
+      });
+
+      // 4. Tabs (excluding incognito)
+      batchStatements.push({ sql: 'DELETE FROM tabs;', args: [] });
+      state.tabs
+        .filter((t) => !t.isIncognito)
+        .forEach((t, idx) => {
+          let thumbnailRelPath: string | null = null;
+          if (t.thumbnailDataUrl) {
+            thumbnailRelPath = this.assetStore.saveThumbnail(t.id, t.thumbnailDataUrl);
+          }
+          batchStatements.push({
+            sql: `INSERT INTO tabs (
+              id, space_id, group_id, url, title, favicon, is_home_page,
+              can_go_back, can_go_forward, is_pinned, is_muted, is_playing_media,
+              is_incognito, theme_color, thumbnail_rel_path, last_accessed_timestamp, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?);`,
+            args: [
+              t.id,
+              t.spaceId,
+              t.groupId ?? null,
+              t.url,
+              t.title,
+              t.favicon ?? null,
+              t.isHomePage ? 1 : 0,
+              t.canGoBack ? 1 : 0,
+              t.canGoForward ? 1 : 0,
+              t.isPinned ? 1 : 0,
+              t.isMuted ? 1 : 0,
+              t.isPlayingMedia ? 1 : 0,
+              t.themeColor ?? null,
+              thumbnailRelPath,
+              t.lastAccessedTimestamp,
+              idx
+            ]
+          });
+        });
+
+      // 5. Bookmarks / SpeedDial (Replace all to keep order and deletions synchronized)
+      batchStatements.push({ sql: 'DELETE FROM bookmarks;', args: [] });
+      state.speedDialItems.forEach((b, idx) => {
+        batchStatements.push({
+          sql: `INSERT INTO bookmarks (
+            id, sync_uuid, title, url, icon_asset, badge_color_hex, badge_color, space_id, is_speed_dial, sort_order, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?);`,
           args: [
-            t.id,
-            t.spaceId,
-            t.groupId ?? null,
-            t.url,
-            t.title,
-            t.favicon ?? null,
-            t.isHomePage ? 1 : 0,
-            t.canGoBack ? 1 : 0,
-            t.canGoForward ? 1 : 0,
-            t.isPinned ? 1 : 0,
-            t.isMuted ? 1 : 0,
-            t.isPlayingMedia ? 1 : 0,
-            t.themeColor ?? null,
-            thumbnailRelPath,
-            t.lastAccessedTimestamp,
-            idx
+            b.id,
+            b.id,
+            b.title,
+            b.url,
+            b.iconAsset ?? null,
+            b.badgeColorHex,
+            b.badgeColor ?? hexToArgb(b.badgeColorHex),
+            b.spaceId ?? null,
+            idx,
+            now
           ]
         });
       });
 
-    // 5. Bookmarks / SpeedDial
-    batchStatements.push({ sql: 'DELETE FROM bookmarks;', args: [] });
-    state.speedDialItems.forEach((b, idx) => {
+      // 6. History
+      if (state.history.length === 0) {
+        batchStatements.push({ sql: 'DELETE FROM history;', args: [] });
+      } else {
+        for (const h of state.history) {
+          batchStatements.push({
+            sql: `INSERT INTO history (entry_id, title, url, timestamp, space_id, visit_count, updated_at)
+                  VALUES (?, ?, ?, ?, ?, 1, ?)
+                  ON CONFLICT(url) DO UPDATE SET
+                    title = excluded.title,
+                    timestamp = excluded.timestamp,
+                    space_id = excluded.space_id,
+                    updated_at = excluded.updated_at;`,
+            args: [h.id || crypto.randomUUID(), h.title, h.url, h.timestamp, h.spaceId ?? null, now]
+          });
+        }
+      }
+
+      // 7. Downloads (Synchronized with memory state)
+      batchStatements.push({ sql: 'DELETE FROM downloads;', args: [] });
+      for (const d of state.downloads) {
+        batchStatements.push({
+          sql: `INSERT INTO downloads (id, file_name, url, save_path, mime_type, received_bytes, total_bytes, status, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          args: [d.id, d.fileName, d.url, d.savePath, d.mimeType, d.receivedBytes, d.totalBytes, d.status, d.timestamp]
+        });
+      }
+
+      // 8. Saved Pages (Reading List - Synchronized with memory state)
+      batchStatements.push({ sql: 'DELETE FROM saved_pages;', args: [] });
+      for (const p of state.savedPages) {
+        batchStatements.push({
+          sql: `INSERT INTO saved_pages (id, sync_uuid, title, url, domain, saved_at, article_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+          args: [p.id, p.id, p.title, p.url, p.domain, p.savedAt, JSON.stringify(p.article), now]
+        });
+      }
+
+      // 9. Site Settings
+      batchStatements.push({ sql: 'DELETE FROM site_settings;', args: [] });
+      for (const [origin, s] of Object.entries(state.siteSettings)) {
+        batchStatements.push({
+          sql: `INSERT INTO site_settings (
+            origin, javascript_enabled, ad_block_whitelisted, camera_allowed,
+            microphone_allowed, geolocation_allowed, notifications_allowed, popups_allowed, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          args: [
+            origin,
+            s.javascriptEnabled ? 1 : 0,
+            s.adBlockWhitelisted ? 1 : 0,
+            s.cameraAllowed ? 1 : 0,
+            s.microphoneAllowed ? 1 : 0,
+            s.geolocationAllowed ? 1 : 0,
+            s.notificationsAllowed ? 1 : 0,
+            s.popupsAllowed ? 1 : 0,
+            now
+          ]
+        });
+      }
+
+      // 10. Reader Highlights (Persist in DB to prevent losing user highlights)
+      batchStatements.push({ sql: 'DELETE FROM reader_highlights;', args: [] });
+      if (state.readerHighlights) {
+        for (const [pageId, highlights] of Object.entries(state.readerHighlights)) {
+          for (const [blockIdxStr, color] of Object.entries(highlights)) {
+            const blockIdx = Number(blockIdxStr);
+            batchStatements.push({
+              sql: `INSERT INTO reader_highlights (page_id, block_index, color, updated_at) VALUES (?, ?, ?, ?);`,
+              args: [pageId, blockIdx, color, now]
+            });
+          }
+        }
+      }
+
+      // 11. Privacy Stats
       batchStatements.push({
-        sql: `INSERT INTO bookmarks (
-          id, sync_uuid, title, url, icon_asset, badge_color_hex, badge_color, is_speed_dial, sort_order, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?);`,
+        sql: `INSERT INTO privacy_stats (id, total_blocked_count, estimated_bytes_saved, estimated_time_saved_ms, by_category_json, updated_at)
+              VALUES (1, ?, ?, ?, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET
+                total_blocked_count = excluded.total_blocked_count,
+                estimated_bytes_saved = excluded.estimated_bytes_saved,
+                estimated_time_saved_ms = excluded.estimated_time_saved_ms,
+                by_category_json = excluded.by_category_json,
+                updated_at = excluded.updated_at;`,
         args: [
-          b.id,
-          b.id,
-          b.title,
-          b.url,
-          b.iconAsset ?? null,
-          b.badgeColorHex,
-          b.badgeColor ?? hexToArgb(b.badgeColorHex),
-          idx,
+          state.privacyStats.totalBlockedCount,
+          state.privacyStats.estimatedBytesSaved,
+          state.privacyStats.estimatedTimeSavedMs,
+          JSON.stringify(state.privacyStats.byCategory),
+          now
+        ]
+      });
+
+      // Execute in batch transactions
+      const chunkSize = 200;
+      for (let i = 0; i < batchStatements.length; i += chunkSize) {
+        const chunk = batchStatements.slice(i, i + chunkSize);
+        await this.client.batch(chunk, 'write');
+      }
+    });
+  }
+
+  async insertBookmark(bookmark: SpeedDialItem): Promise<void> {
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      const now = Date.now();
+      await this.client.execute({
+        sql: `INSERT OR REPLACE INTO bookmarks (
+          id, sync_uuid, folder_id, title, url, icon_asset, badge_color_hex, badge_color, space_id, is_speed_dial, sort_order, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 999, ?);`,
+        args: [
+          bookmark.id,
+          bookmark.id,
+          null,
+          bookmark.title,
+          bookmark.url,
+          bookmark.iconAsset || null,
+          bookmark.badgeColorHex || '#4285F4',
+          bookmark.badgeColor ?? 0xff4285f4,
+          bookmark.spaceId || null,
           now
         ]
       });
     });
+  }
 
-    // 6. History (Upsert to preserve visit_count and prevent truncation)
-    for (const h of state.history) {
-      batchStatements.push({
+  async deleteBookmark(id: string): Promise<void> {
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      await this.client.execute({
+        sql: 'DELETE FROM bookmarks WHERE id = ?;',
+        args: [id]
+      });
+    });
+  }
+
+  async recordHistoryVisit(entry: HistoryEntry): Promise<void> {
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      const now = Date.now();
+      await this.client.execute({
         sql: `INSERT INTO history (entry_id, title, url, timestamp, space_id, visit_count, updated_at)
               VALUES (?, ?, ?, ?, ?, 1, ?)
               ON CONFLICT(url) DO UPDATE SET
                 title = excluded.title,
                 timestamp = excluded.timestamp,
                 space_id = excluded.space_id,
+                visit_count = history.visit_count + 1,
                 updated_at = excluded.updated_at;`,
-        args: [h.id || crypto.randomUUID(), h.title, h.url, h.timestamp, h.spaceId ?? null, now]
+        args: [entry.id || crypto.randomUUID(), entry.title, entry.url, entry.timestamp, entry.spaceId ?? null, now]
       });
-    }
-
-    // 7. Downloads (Upsert)
-    for (const d of state.downloads) {
-      batchStatements.push({
-        sql: `INSERT INTO downloads (id, file_name, url, save_path, mime_type, received_bytes, total_bytes, status, timestamp)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT(id) DO UPDATE SET
-                received_bytes = excluded.received_bytes,
-                total_bytes = excluded.total_bytes,
-                status = excluded.status;`,
-        args: [d.id, d.fileName, d.url, d.savePath, d.mimeType, d.receivedBytes, d.totalBytes, d.status, d.timestamp]
-      });
-    }
-
-    // 8. Saved Pages (Upsert)
-    for (const p of state.savedPages) {
-      batchStatements.push({
-        sql: `INSERT INTO saved_pages (id, sync_uuid, title, url, domain, saved_at, article_json, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT(url) DO UPDATE SET
-                title = excluded.title,
-                domain = excluded.domain,
-                article_json = excluded.article_json,
-                updated_at = excluded.updated_at;`,
-        args: [p.id, p.id, p.title, p.url, p.domain, p.savedAt, JSON.stringify(p.article), now]
-      });
-    }
-
-    // 9. Site Settings
-    batchStatements.push({ sql: 'DELETE FROM site_settings;', args: [] });
-    for (const [origin, s] of Object.entries(state.siteSettings)) {
-      batchStatements.push({
-        sql: `INSERT INTO site_settings (
-          origin, javascript_enabled, ad_block_whitelisted, camera_allowed,
-          microphone_allowed, geolocation_allowed, notifications_allowed, popups_allowed, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        args: [
-          origin,
-          s.javascriptEnabled ? 1 : 0,
-          s.adBlockWhitelisted ? 1 : 0,
-          s.cameraAllowed ? 1 : 0,
-          s.microphoneAllowed ? 1 : 0,
-          s.geolocationAllowed ? 1 : 0,
-          s.notificationsAllowed ? 1 : 0,
-          s.popupsAllowed ? 1 : 0,
-          now
-        ]
-      });
-    }
-
-    // 10. Privacy Stats
-    batchStatements.push({
-      sql: `INSERT INTO privacy_stats (id, total_blocked_count, estimated_bytes_saved, estimated_time_saved_ms, by_category_json, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              total_blocked_count = excluded.total_blocked_count,
-              estimated_bytes_saved = excluded.estimated_bytes_saved,
-              estimated_time_saved_ms = excluded.estimated_time_saved_ms,
-              by_category_json = excluded.by_category_json,
-              updated_at = excluded.updated_at;`,
-      args: [
-        state.privacyStats.totalBlockedCount,
-        state.privacyStats.estimatedBytesSaved,
-        state.privacyStats.estimatedTimeSavedMs,
-        JSON.stringify(state.privacyStats.byCategory),
-        now
-      ]
-    });
-
-    // Execute in batch transactions
-    const chunkSize = 200;
-    for (let i = 0; i < batchStatements.length; i += chunkSize) {
-      const chunk = batchStatements.slice(i, i + chunkSize);
-      await this.client.batch(chunk, 'write');
-    }
-  }
-
-  async insertBookmark(bookmark: SpeedDialItem): Promise<void> {
-    await this.init();
-    const now = Date.now();
-    await this.client.execute({
-      sql: `INSERT OR REPLACE INTO bookmarks (
-        id, title, url, icon_asset, badge_color_hex, badge_color_argb, space_id, sort_order, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 999, ?);`,
-      args: [
-        bookmark.id,
-        bookmark.title,
-        bookmark.url,
-        bookmark.iconAsset || null,
-        bookmark.badgeColorHex || '#4285F4',
-        bookmark.badgeColor ?? 0xff4285f4,
-        bookmark.spaceId || null,
-        now
-      ]
     });
   }
 
-  async recordHistoryVisit(entry: HistoryEntry): Promise<void> {
-    await this.init();
-    const now = Date.now();
-    await this.client.execute({
-      sql: `INSERT INTO history (entry_id, title, url, timestamp, space_id, visit_count, updated_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?)
-            ON CONFLICT(url) DO UPDATE SET
-              title = excluded.title,
-              timestamp = excluded.timestamp,
-              space_id = excluded.space_id,
-              visit_count = history.visit_count + 1,
-              updated_at = excluded.updated_at;`,
-      args: [entry.id || crypto.randomUUID(), entry.title, entry.url, entry.timestamp, entry.spaceId ?? null, now]
+  async deleteHistoryItem(idOrUrl: string): Promise<void> {
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      await this.client.execute({
+        sql: 'DELETE FROM history WHERE entry_id = ? OR url = ?;',
+        args: [idOrUrl, idOrUrl]
+      });
+    });
+  }
+
+  async clearHistory(): Promise<void> {
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      await this.client.execute('DELETE FROM history;');
+      try {
+        await this.client.execute('DELETE FROM history_fts;');
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  async clearDownloads(): Promise<void> {
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      await this.client.execute('DELETE FROM downloads;');
+    });
+  }
+
+  async deleteSavedPage(id: string): Promise<void> {
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      await this.client.execute({
+        sql: 'DELETE FROM saved_pages WHERE id = ?;',
+        args: [id]
+      });
     });
   }
 
@@ -777,10 +884,18 @@ export class SqliteDatabase {
     limit = 8
   ): Promise<{ history: HistoryEntry[]; bookmarks: SpeedDialItem[] }> {
     await this.init();
-    const cleanQuery = query.trim().replace(/['"*\\]/g, '');
-    if (!cleanQuery) return { history: [], bookmarks: [] };
+    const rawQuery = query.trim();
+    if (!rawQuery) return { history: [], bookmarks: [] };
 
-    const ftsPattern = `${cleanQuery}*`;
+    // Tokenize query removing characters that break FTS5 syntax
+    const tokens = rawQuery
+      .split(/[\s/:?#&.+=_-]+/)
+      .map((t) => t.replace(/[^a-zA-Z0-9_\u00C0-\u017F]/g, ''))
+      .filter((t) => t.length > 0);
+
+    if (tokens.length === 0) return { history: [], bookmarks: [] };
+
+    const ftsPattern = tokens.map((t) => `"${t}"*`).join(' ');
 
     try {
       const historyRes = await this.client.execute({
@@ -794,7 +909,7 @@ export class SqliteDatabase {
       });
 
       const bookmarksRes = await this.client.execute({
-        sql: `SELECT b.id, b.title, b.url, b.icon_asset, b.badge_color_hex, b.badge_color
+        sql: `SELECT b.id, b.title, b.url, b.icon_asset, b.badge_color_hex, b.badge_color, b.space_id
               FROM bookmarks_fts fts
               JOIN bookmarks b ON b.rowid = fts.rowid
               WHERE bookmarks_fts MATCH ?
@@ -816,12 +931,13 @@ export class SqliteDatabase {
           url: String(r.url),
           iconAsset: r.icon_asset ? String(r.icon_asset) : undefined,
           badgeColorHex: String(r.badge_color_hex),
-          badgeColor: Number(r.badge_color)
+          badgeColor: Number(r.badge_color),
+          spaceId: r.space_id ? String(r.space_id) : undefined
         }))
       };
     } catch {
-      // Fallback to LIKE if FTS query syntax issues arise
-      const likePattern = `%${cleanQuery}%`;
+      // Fallback to LIKE with sanitized tokens
+      const likePattern = `%${tokens.join('%')}%`;
       const historyRes = await this.client.execute({
         sql: `SELECT entry_id, title, url, timestamp, space_id, visit_count
               FROM history
@@ -831,7 +947,7 @@ export class SqliteDatabase {
         args: [likePattern, likePattern, limit]
       });
       const bookmarksRes = await this.client.execute({
-        sql: `SELECT id, title, url, icon_asset, badge_color_hex, badge_color
+        sql: `SELECT id, title, url, icon_asset, badge_color_hex, badge_color, space_id
               FROM bookmarks
               WHERE title LIKE ? OR url LIKE ?
               LIMIT ?;`,
@@ -852,7 +968,8 @@ export class SqliteDatabase {
           url: String(r.url),
           iconAsset: r.icon_asset ? String(r.icon_asset) : undefined,
           badgeColorHex: String(r.badge_color_hex),
-          badgeColor: Number(r.badge_color)
+          badgeColor: Number(r.badge_color),
+          spaceId: r.space_id ? String(r.space_id) : undefined
         }))
       };
     }
@@ -1001,6 +1118,48 @@ export class SqliteDatabase {
       importedHistory: importedHistoryCount,
       importedSpaces: importedSpacesCount
     };
+  }
+
+  async savePairedDevice(device: {
+    deviceId: string;
+    deviceName: string;
+    platform: string;
+    sharedSecret: string;
+    lastSeenAt: number;
+  }): Promise<void> {
+    return this.runInWriteQueue(async () => {
+      await this.init();
+      await this.client.execute({
+        sql: `INSERT INTO paired_devices (device_id, device_name, platform, shared_secret_enc, last_seen_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(device_id) DO UPDATE SET
+                device_name = excluded.device_name,
+                platform = excluded.platform,
+                shared_secret_enc = excluded.shared_secret_enc,
+                last_seen_at = excluded.last_seen_at;`,
+        args: [device.deviceId, device.deviceName, device.platform, device.sharedSecret, device.lastSeenAt]
+      });
+    });
+  }
+
+  async getPairedDevices(): Promise<
+    Array<{
+      deviceId: string;
+      deviceName: string;
+      platform: string;
+      sharedSecret: string;
+      lastSeenAt: number;
+    }>
+  > {
+    await this.init();
+    const res = await this.client.execute('SELECT * FROM paired_devices ORDER BY last_seen_at DESC;');
+    return res.rows.map((r) => ({
+      deviceId: String(r.device_id),
+      deviceName: String(r.device_name),
+      platform: String(r.platform),
+      sharedSecret: String(r.shared_secret_enc),
+      lastSeenAt: Number(r.last_seen_at)
+    }));
   }
 
   async close(): Promise<void> {

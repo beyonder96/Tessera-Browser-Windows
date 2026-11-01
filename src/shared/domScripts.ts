@@ -42,8 +42,11 @@ export const COOKIE_BANNER_BLOCKER_SCRIPT = `
     if (!style) {
       style = document.createElement('style');
       style.id = 'tessera-cookie-blocker';
-      style.textContent = cookieSelectors.join(', ') + ' { display: none !important; opacity: 0 !important; pointer-events: none !important; } body, html { overflow: auto !important; }';
+      style.textContent = cookieSelectors.join(', ') + ' { display: none !important; opacity: 0 !important; pointer-events: none !important; }';
       (document.head || document.documentElement).appendChild(style);
+      if (document.body && document.body.style.overflow === 'hidden') {
+        document.body.style.overflow = '';
+      }
     }
   } catch (e) {}
 })();

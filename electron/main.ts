@@ -23,7 +23,8 @@ import { LocalBridgeServer } from './localBridgeServer';
 import { TesseraSyncService } from './sync/tesseraSyncService';
 import { UpdateService } from './updateService';
 import { BrowserImportService } from './browserImportService';
-import type { HistoryEntry, PersistedAppState, SiteSettings } from '../src/shared/types';
+import { PinCrypto } from './security/pinCrypto';
+import type { HistoryEntry, PersistedAppState, SiteSettings, SpeedDialItem } from '../src/shared/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,7 +67,7 @@ app.whenReady().then(async () => {
   const userDataDir = app.getPath('userData');
   const storageService = new StorageService(userDataDir);
   const aiService = new TesseraAiService(userDataDir);
-  const privacyController = new PrivacyShieldController(() => mainWindow);
+  const privacyController = new PrivacyShieldController(() => mainWindow, userDataDir);
   const downloadController = new DownloadController(() => mainWindow);
   const updateController = new UpdateService(() => mainWindow);
   const syncService = new TesseraSyncService({
@@ -98,15 +99,20 @@ app.whenReady().then(async () => {
       : 'light';
   privacyController.updateConfig(latestStateCache.settings.adBlockEnabled, latestStateCache.siteSettings);
 
-  // Pre-configure default space partitions
-  for (const sp of latestStateCache.spaces) {
-    privacyController.ensurePartitionConfigured(`persist:${sp.id}`, (ses) =>
+  // Pre-configure default space partitions (awaiting MV3 Chrome compatibility extension & cookie hygiene)
+  await Promise.all([
+    ...latestStateCache.spaces.map((sp) =>
+      privacyController.ensurePartitionConfigured(`persist:${sp.id}`, (ses) =>
+        downloadController.attachToSession(ses)
+      )
+    ),
+    privacyController.ensurePartitionConfigured('incognito_session', (ses) =>
       downloadController.attachToSession(ses)
-    );
-  }
-  privacyController.ensurePartitionConfigured('incognito_session', (ses) =>
-    downloadController.attachToSession(ses)
-  );
+    ),
+    privacyController.ensurePartitionConfigured('default', (ses) =>
+      downloadController.attachToSession(ses)
+    )
+  ]);
 
   // Guarantee defaultSession uses standard Chromium UA and grants media (microphone / audio) for main window UI
   session.defaultSession.setUserAgent(getStandardChromiumUserAgent());
@@ -231,8 +237,16 @@ app.whenReady().then(async () => {
       } else if (isCtrl && !input.shift && key === 'p') {
         event.preventDefault();
         dispatchShortcut('print');
+      } else if (input.alt && !isCtrl && (key === 'arrowleft' || input.key === 'Left')) {
+        event.preventDefault();
+        dispatchShortcut('go-back');
+      } else if (input.alt && !isCtrl && (key === 'arrowright' || input.key === 'Right')) {
+        event.preventDefault();
+        dispatchShortcut('go-forward');
       } else if (input.key === 'F11') {
         event.preventDefault();
+        const nextFs = !mainWindow.isFullScreen();
+        mainWindow.setFullScreen(nextFs);
         dispatchShortcut('toggle-fullscreen');
       } else if ((isCtrl && input.alt && key === 'v') || (input.alt && key === 'm')) {
         event.preventDefault();
@@ -244,6 +258,7 @@ app.whenReady().then(async () => {
   // Intercept popups & auxiliary windows (window.open / target="_blank") inside <webview> guests
   app.on('web-contents-created', (_ev, contents) => {
     registerShortcutInterceptor(contents);
+    contents.setUserAgent(getStandardChromiumUserAgent());
     if (contents.getType() === 'webview') {
       contents.setWindowOpenHandler((details) => {
         const url = details.url;
@@ -272,7 +287,9 @@ app.whenReady().then(async () => {
               height: 680,
               webPreferences: {
                 session: contents.session,
+                preload: webviewPreloadPath,
                 nodeIntegration: false,
+                nodeIntegrationInSubFrames: true,
                 contextIsolation: true,
                 sandbox: true,
                 plugins: true
@@ -347,6 +364,7 @@ app.whenReady().then(async () => {
   mainWindow.webContents.on('will-attach-webview', (_event, webPreferences) => {
     webPreferences.preload = webviewPreloadPath;
     webPreferences.nodeIntegration = false;
+    webPreferences.nodeIntegrationInSubFrames = true;
     webPreferences.contextIsolation = true;
     webPreferences.plugins = true; // Enables Chromium's native PDF Viewer plugin!
   });
@@ -428,8 +446,8 @@ app.whenReady().then(async () => {
     await storageService.recordHistoryVisit(entry);
   });
 
-  ipcMain.handle('tessera:ensure-partition', (_e, partitionName: string) => {
-    privacyController.ensurePartitionConfigured(partitionName, (ses) =>
+  ipcMain.handle('tessera:ensure-partition', async (_e, partitionName: string) => {
+    await privacyController.ensurePartitionConfigured(partitionName, (ses) =>
       downloadController.attachToSession(ses)
     );
   });
@@ -573,6 +591,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('tessera:sync-connected-mobile', () => {
     return syncService.getConnectedMobileDevice();
   });
+  ipcMain.handle('tessera:pin-hash', (_e, pin: string) => {
+    return PinCrypto.hashPin(pin);
+  });
+  ipcMain.handle('tessera:pin-verify', (_e, candidatePin: string, storedHash: string) => {
+    return PinCrypto.verifyPin(candidatePin, storedHash);
+  });
   ipcMain.handle('tessera:clear-browsing-data', async () => {
     try {
       const sessionsToClear = [session.defaultSession];
@@ -608,31 +632,101 @@ app.whenReady().then(async () => {
     return BrowserImportService.getInstalledBrowsers();
   });
 
+  ipcMain.handle('tessera:translate-texts', async (_e, texts: string[], targetLang = 'pt') => {
+    if (!Array.isArray(texts) || texts.length === 0) return [];
+    const results: string[] = [];
+    for (const text of texts.slice(0, 100)) {
+      if (!text || text.trim().length <= 1) {
+        results.push(text);
+        continue;
+      }
+      try {
+        const endpoint = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(
+          targetLang
+        )}&dt=t&q=${encodeURIComponent(text.trim())}`;
+        const res = await fetch(endpoint, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        });
+        if (res.ok) {
+          const data = (await res.json()) as any;
+          if (Array.isArray(data) && Array.isArray(data[0])) {
+            const translatedPart = data[0].map((part: any) => part[0]).join('');
+            results.push(translatedPart || text);
+            continue;
+          }
+        }
+        results.push(text);
+      } catch {
+        results.push(text);
+      }
+    }
+    return results;
+  });
+
   ipcMain.handle('tessera:import-browser-bookmarks', async (_e, browserId: 'chrome' | 'edge') => {
     const localAppData = process.env.LOCALAPPDATA || '';
     const dir =
       browserId === 'edge'
-        ? path.join(localAppData, 'Microsoft', 'Edge', 'User Data', 'Default')
-        : path.join(localAppData, 'Google', 'Chrome', 'User Data', 'Default');
+        ? path.join(localAppData, 'Microsoft', 'Edge', 'User Data')
+        : path.join(localAppData, 'Google', 'Chrome', 'User Data');
 
     const bookmarks = BrowserImportService.extractChromeBookmarks(dir);
     if (bookmarks.length === 0) return { count: 0 };
 
     const spaceId = latestStateCache?.activeSpaceId || 'space_general';
+    const newItems: SpeedDialItem[] = [];
     for (const bm of bookmarks) {
-      await storageService.getSqliteDatabase().insertBookmark({
+      const item: SpeedDialItem = {
         id: `bm_imported_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         title: bm.title,
         url: bm.url,
         spaceId,
-        badgeColorHex: '#4285F4'
-      });
+        badgeColorHex: '#4285F4',
+        badgeColor: 0xff4285f4
+      };
+      await storageService.getSqliteDatabase().insertBookmark(item);
+      newItems.push(item);
     }
+
+    if (latestStateCache) {
+      const existingUrls = new Set(latestStateCache.speedDialItems.map((b) => b.url.toLowerCase()));
+      for (const item of newItems) {
+        if (!existingUrls.has(item.url.toLowerCase())) {
+          existingUrls.add(item.url.toLowerCase());
+          latestStateCache.speedDialItems.push(item);
+        }
+      }
+    }
+
     return { count: bookmarks.length };
   });
 
   ipcMain.handle('tessera:get-google-account-status', async () => {
+    const spacesToCheck = latestStateCache?.spaces || [];
+    for (const sp of spacesToCheck) {
+      const res = await BrowserImportService.checkGoogleSession(session.fromPartition(`persist:${sp.id}`));
+      if (res.isAuthenticated) return res;
+    }
     return BrowserImportService.checkGoogleSession(session.defaultSession);
+  });
+
+  ipcMain.handle('tessera:clear-google-auth-cookies', async (_e, partitionName?: string) => {
+    if (partitionName && partitionName !== 'default') {
+      await privacyController.sanitizeUnauthenticatedGoogleRejectionCookies(
+        session.fromPartition(partitionName)
+      );
+    } else {
+      const spacesToSanitize = latestStateCache?.spaces || [];
+      await Promise.all([
+        privacyController.sanitizeUnauthenticatedGoogleRejectionCookies(session.defaultSession),
+        ...spacesToSanitize.map((sp) =>
+          privacyController.sanitizeUnauthenticatedGoogleRejectionCookies(
+            session.fromPartition(`persist:${sp.id}`)
+          )
+        )
+      ]);
+    }
+    return { success: true };
   });
 
   ipcMain.handle('tessera:open-external-url', async (_e, targetUrl: string) => {

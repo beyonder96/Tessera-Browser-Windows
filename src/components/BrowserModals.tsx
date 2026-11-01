@@ -31,7 +31,8 @@ import {
   Mic,
   ExternalLink,
   Code,
-  Copy
+  Copy,
+  Sparkles
 } from 'lucide-react';
 import type {
   BrowserSettings,
@@ -1181,6 +1182,12 @@ export const FullSettingsModal: React.FC<{
         <div style={sectionBoxStyle}>
           <div style={sectionLabelStyle}>START PAGE & INTELIGÊNCIA ARTIFICIAL</div>
           <ToggleRow
+            icon={<Sparkles size={15} style={{ color: settings.tesseraAiEnabled ? 'var(--accent-primary)' : undefined }} />}
+            title="Ativar Tessera AI (Assistente inteligente, Resumos e Podcastify)"
+            checked={settings.tesseraAiEnabled}
+            onChange={(v) => onUpdateSettings({ tesseraAiEnabled: v })}
+          />
+          <ToggleRow
             icon={<Sun size={15} />}
             title="Modo Minimalismo Digital Zen (Ocultar widgets da Home)"
             checked={settings.digitalMinimalismMode}
@@ -1242,11 +1249,12 @@ export const FullSettingsModal: React.FC<{
               style={{ ...inputFieldStyle, flex: 1 }}
             />
             <button
-              onClick={() => {
+              onClick={async () => {
                 if (!pinDraft.trim()) return;
+                const hashed = (await window.tesseraApi?.pinHash?.(pinDraft.trim())) || btoa(pinDraft.trim());
                 onUpdateSettings({
                   incognitoPinLockEnabled: true,
-                  incognitoPinHash: btoa(pinDraft.trim())
+                  incognitoPinHash: hashed
                 });
                 setPinDraft('');
               }}

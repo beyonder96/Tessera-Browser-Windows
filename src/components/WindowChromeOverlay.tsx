@@ -19,7 +19,11 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<{ version?: string; releaseNotes?: string } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{
+    status: string;
+    version?: string;
+    releaseNotes?: string;
+  } | null>(null);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
 
   useEffect(() => {
@@ -27,8 +31,8 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
 
     if (window.tesseraApi?.onUpdateStatus) {
       const unsub = window.tesseraApi.onUpdateStatus((payload) => {
-        if (payload.status === 'downloaded' || payload.status === 'available') {
-          setUpdateInfo({ version: payload.version, releaseNotes: payload.releaseNotes });
+        if (payload.status === 'downloaded' || payload.status === 'downloading' || payload.status === 'available') {
+          setUpdateInfo({ status: payload.status, version: payload.version, releaseNotes: payload.releaseNotes });
         }
       });
       return () => unsub();
@@ -154,41 +158,50 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
                     style={{
                       fontSize: 9.5,
                       fontWeight: 600,
-                      color: '#34C759',
-                      background: 'rgba(52, 199, 89, 0.15)',
+                      color: updateInfo.status === 'downloaded' ? '#34C759' : '#007AFF',
+                      background: updateInfo.status === 'downloaded' ? 'rgba(52, 199, 89, 0.15)' : 'rgba(0, 122, 255, 0.15)',
                       padding: '2px 6px',
                       borderRadius: 6
                     }}
                   >
-                    Pronto
+                    {updateInfo.status === 'downloaded' ? 'Pronto' : 'Baixando...'}
                   </span>
                 </div>
                 <p style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                  Uma nova atualização foi baixada e está pronta para ser aplicada.
+                  {updateInfo.status === 'downloaded'
+                    ? 'Uma nova atualização foi baixada e está pronta para ser aplicada.'
+                    : 'Baixando atualização em segundo plano...'}
                 </p>
-                <button
-                  onClick={() => window.tesseraApi?.quitAndInstallUpdate()}
-                  style={{
-                    padding: '7px 10px',
-                    borderRadius: 9,
-                    background: 'var(--accent-primary)',
-                    color: '#FFF',
-                    fontWeight: 600,
-                    fontSize: 11.5,
-                    border: 'none',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6,
-                    transition: 'opacity 0.15s ease'
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
-                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-                >
-                  <ArrowUpCircle size={13} />
-                  <span>Reiniciar e Atualizar</span>
-                </button>
+                {updateInfo.status === 'downloaded' ? (
+                  <button
+                    onClick={() => window.tesseraApi?.quitAndInstallUpdate()}
+                    style={{
+                      padding: '7px 10px',
+                      borderRadius: 9,
+                      background: 'var(--accent-primary)',
+                      color: '#FFF',
+                      fontWeight: 600,
+                      fontSize: 11.5,
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      transition: 'opacity 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+                  >
+                    <ArrowUpCircle size={13} />
+                    <span>Reiniciar e Atualizar</span>
+                  </button>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-tertiary)', padding: '4px 0' }}>
+                    <Download size={13} style={{ animation: 'bounce 1s infinite' }} />
+                    <span>Download em andamento...</span>
+                  </div>
+                )}
               </div>
             )}
           </div>

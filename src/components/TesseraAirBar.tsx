@@ -227,6 +227,27 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
 
   const cleanHost = activeTab.isHomePage ? 'Início' : extractCleanHost(activeTab.url);
   const isSecure = activeTab.url.startsWith('https://');
+  const isLocalLan = (() => {
+    try {
+      const h = new URL(activeTab.url).hostname.toLowerCase();
+      return (
+        h === 'localhost' ||
+        h === '127.0.0.1' ||
+        /^192\.168\./.test(h) ||
+        /^10\./.test(h) ||
+        /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h) ||
+        h.endsWith('.local')
+      );
+    } catch {
+      return false;
+    }
+  })();
+  const lockColor = isSecure ? (isLocalLan ? '#FF9500' : '#34C759') : 'var(--text-tertiary)';
+  const lockTooltip = isSecure
+    ? isLocalLan
+      ? 'Rede Local — Certificado autoassinado aceito'
+      : 'Conexão criptografada e segura'
+    : 'Conexão não criptografada';
   const progress = activeTab.progress ?? 0;
   const showProgress = Boolean(activeTab.isLoading) || (progress > 0 && progress < 1);
 
@@ -1280,7 +1301,7 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
               >
                 <button
                   type="button"
-                  title="Permissões e Segurança do Site"
+                  title={activeTab.isHomePage ? 'Pesquisar ou digitar URL' : lockTooltip}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!activeTab.isHomePage) onOpenSiteSettings();
@@ -1290,7 +1311,7 @@ export const TesseraAirBar: React.FC<TesseraAirBarProps> = ({
                     alignItems: 'center',
                     justifyContent: 'center',
                     padding: 4,
-                    color: isSecure ? '#34C759' : 'var(--text-tertiary)'
+                    color: lockColor
                   }}
                 >
                   {activeTab.isHomePage ? <Search size={14} /> : <Lock size={13.5} />}

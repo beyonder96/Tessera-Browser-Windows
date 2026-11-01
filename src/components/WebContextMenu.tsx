@@ -4,7 +4,6 @@ import {
   ExternalLink,
   Eye,
   FileText,
-  HelpCircle,
   Image as ImageIcon,
   Languages,
   Maximize2,
@@ -13,7 +12,6 @@ import {
   Search,
   Share2,
   Sparkles,
-  Volume2,
   Scissors,
   Clipboard,
   CheckSquare,
@@ -100,9 +98,9 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
 
   if (!data) return null;
 
-  // Ensure menu stays within window boundaries
+  // Keep menu within window boundaries
   const menuWidth = 240;
-  const menuHeight = 320;
+  const menuHeight = 340;
   const clampedX = Math.min(Math.max(8, data.x), window.innerWidth - menuWidth - 12);
   const clampedY = Math.min(Math.max(8, data.y), window.innerHeight - menuHeight - 12);
 
@@ -119,22 +117,36 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
   return (
     <div
       ref={menuRef}
-      className="fixed z-[9999] rounded-2xl border border-white/10 bg-[#161618]/95 p-1.5 text-[13px] text-white shadow-2xl backdrop-blur-2xl animate-in fade-in zoom-in-95 duration-100 select-none w-60"
-      style={{ left: clampedX, top: clampedY }}
+      style={{
+        position: 'fixed',
+        left: clampedX,
+        top: clampedY,
+        zIndex: 99999,
+        width: menuWidth,
+        borderRadius: 16,
+        border: '1px solid var(--border-hairline)',
+        background: 'var(--bg-surface)',
+        backdropFilter: 'blur(20px)',
+        padding: 6,
+        fontSize: 13,
+        color: 'var(--text-primary)',
+        boxShadow: 'var(--shadow-floating)',
+        userSelect: 'none'
+      }}
       onContextMenu={(e) => e.preventDefault()}
     >
       {/* 1. SELEÇÃO DE TEXTO */}
       {hasSelection && (
-        <div className="space-y-0.5 border-b border-white/10 pb-1.5 mb-1.5">
+        <div style={sectionStyle}>
           <button
             onClick={() => {
               onAskAi(data.selectionText!.trim(), data.pageUrl);
               onClose();
             }}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left font-medium text-sky-400 hover:bg-sky-500/20 transition-colors"
+            style={{ ...itemStyle, color: 'var(--accent-primary)', fontWeight: 600 }}
           >
-            <Sparkles className="h-4 w-4 shrink-0 text-sky-400" />
-            <span className="truncate">Perguntar à Tessera AI</span>
+            <Sparkles size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+            <span style={truncateStyle}>Perguntar à Tessera AI</span>
           </button>
           <button
             onClick={() => {
@@ -142,35 +154,35 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
               onOpenNewTab(`https://www.google.com/search?q=${query}`);
               onClose();
             }}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={itemStyle}
           >
-            <Search className="h-4 w-4 shrink-0 text-neutral-400" />
-            <span className="truncate">Pesquisar na Web</span>
+            <Search size={14} style={iconStyle} />
+            <span style={truncateStyle}>Pesquisar na Web</span>
           </button>
           <button
             onClick={() => copyToClipboard(data.selectionText!.trim())}
-            className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={{ ...itemStyle, justifyContent: 'space-between' }}
           >
-            <div className="flex items-center gap-2.5">
-              <Copy className="h-4 w-4 shrink-0 text-neutral-400" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Copy size={14} style={iconStyle} />
               <span>Copiar seleção</span>
             </div>
-            <kbd className="text-[11px] text-neutral-500">Ctrl+C</kbd>
+            <kbd style={kbdStyle}>Ctrl+C</kbd>
           </button>
         </div>
       )}
 
       {/* 2. LINK CLICADO */}
       {hasLink && (
-        <div className="space-y-0.5 border-b border-white/10 pb-1.5 mb-1.5">
+        <div style={sectionStyle}>
           <button
             onClick={() => {
               onOpenNewTab(data.linkURL!);
               onClose();
             }}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={itemStyle}
           >
-            <ExternalLink className="h-4 w-4 shrink-0 text-neutral-400" />
+            <ExternalLink size={14} style={iconStyle} />
             <span>Abrir em nova guia</span>
           </button>
           <button
@@ -178,9 +190,9 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
               onOpenIncognitoTab(data.linkURL!);
               onClose();
             }}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={itemStyle}
           >
-            <Eye className="h-4 w-4 shrink-0 text-neutral-400" />
+            <Eye size={14} style={iconStyle} />
             <span>Abrir em guia anônima</span>
           </button>
           <button
@@ -188,16 +200,16 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
               onPeekLink(data.linkURL!, data.linkText || 'Prévia do Link');
               onClose();
             }}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-sky-400 hover:bg-sky-500/15 transition-colors"
+            style={{ ...itemStyle, color: 'var(--accent-primary)' }}
           >
-            <Maximize2 className="h-4 w-4 shrink-0 text-sky-400" />
+            <Maximize2 size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
             <span>Peek Preview</span>
           </button>
           <button
             onClick={() => copyToClipboard(data.linkURL!)}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={itemStyle}
           >
-            <Copy className="h-4 w-4 shrink-0 text-neutral-400" />
+            <Copy size={14} style={iconStyle} />
             <span>Copiar endereço do link</span>
           </button>
           {onSendTabToMobile && (
@@ -206,9 +218,9 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
                 onSendTabToMobile(data.linkURL!, data.linkText || data.linkURL!);
                 onClose();
               }}
-              className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-emerald-400 hover:bg-emerald-500/15 transition-colors"
+              style={{ ...itemStyle, color: '#34C759' }}
             >
-              <Share2 className="h-4 w-4 shrink-0 text-emerald-400" />
+              <Share2 size={14} style={{ color: '#34C759', flexShrink: 0 }} />
               <span>Enviar para o Android</span>
             </button>
           )}
@@ -217,22 +229,22 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
 
       {/* 3. IMAGEM CLICADA */}
       {hasImage && (
-        <div className="space-y-0.5 border-b border-white/10 pb-1.5 mb-1.5">
+        <div style={sectionStyle}>
           <button
             onClick={() => {
               onOpenNewTab(data.srcURL!);
               onClose();
             }}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={itemStyle}
           >
-            <ImageIcon className="h-4 w-4 shrink-0 text-neutral-400" />
+            <ImageIcon size={14} style={iconStyle} />
             <span>Abrir imagem em nova guia</span>
           </button>
           <button
             onClick={() => copyToClipboard(data.srcURL!)}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={itemStyle}
           >
-            <Copy className="h-4 w-4 shrink-0 text-neutral-400" />
+            <Copy size={14} style={iconStyle} />
             <span>Copiar link da imagem</span>
           </button>
         </div>
@@ -240,22 +252,21 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
 
       {/* 4. CAMPO EDITÁVEL (INPUT / TEXTAREA) */}
       {isEditable && (
-        <div className="space-y-0.5 border-b border-white/10 pb-1.5 mb-1.5">
+        <div style={sectionStyle}>
           {data.dictionarySuggestions && data.dictionarySuggestions.length > 0 && (
-            <div className="pb-1 border-b border-white/10 mb-1">
-              <span className="px-2.5 text-[11px] font-semibold text-neutral-500 uppercase tracking-wider">
+            <div style={{ paddingBottom: 4, marginBottom: 4, borderBottom: '1px solid var(--border-hairline)' }}>
+              <span style={{ padding: '0 10px', fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>
                 Ortografia
               </span>
               {data.dictionarySuggestions.slice(0, 3).map((sug, i) => (
                 <button
                   key={i}
                   onClick={() => {
-                    // Substituir palavra
                     onClose();
                   }}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-sky-400 hover:bg-sky-500/15"
+                  style={{ ...itemStyle, color: 'var(--accent-primary)' }}
                 >
-                  <CheckSquare className="h-3.5 w-3.5 shrink-0" />
+                  <CheckSquare size={14} style={{ flexShrink: 0 }} />
                   <span>{sug}</span>
                 </button>
               ))}
@@ -266,78 +277,78 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
               onExecuteEditCommand(data.tabId, 'cut');
               onClose();
             }}
-            className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={{ ...itemStyle, justifyContent: 'space-between' }}
           >
-            <div className="flex items-center gap-2.5">
-              <Scissors className="h-4 w-4 shrink-0 text-neutral-400" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Scissors size={14} style={iconStyle} />
               <span>Recortar</span>
             </div>
-            <kbd className="text-[11px] text-neutral-500">Ctrl+X</kbd>
+            <kbd style={kbdStyle}>Ctrl+X</kbd>
           </button>
           <button
             onClick={() => {
               onExecuteEditCommand(data.tabId, 'copy');
               onClose();
             }}
-            className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={{ ...itemStyle, justifyContent: 'space-between' }}
           >
-            <div className="flex items-center gap-2.5">
-              <Copy className="h-4 w-4 shrink-0 text-neutral-400" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Copy size={14} style={iconStyle} />
               <span>Copiar</span>
             </div>
-            <kbd className="text-[11px] text-neutral-500">Ctrl+C</kbd>
+            <kbd style={kbdStyle}>Ctrl+C</kbd>
           </button>
           <button
             onClick={() => {
               onExecuteEditCommand(data.tabId, 'paste');
               onClose();
             }}
-            className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={{ ...itemStyle, justifyContent: 'space-between' }}
           >
-            <div className="flex items-center gap-2.5">
-              <Clipboard className="h-4 w-4 shrink-0 text-neutral-400" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Clipboard size={14} style={iconStyle} />
               <span>Colar</span>
             </div>
-            <kbd className="text-[11px] text-neutral-500">Ctrl+V</kbd>
+            <kbd style={kbdStyle}>Ctrl+V</kbd>
           </button>
           <button
             onClick={() => {
               onExecuteEditCommand(data.tabId, 'selectAll');
               onClose();
             }}
-            className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+            style={{ ...itemStyle, justifyContent: 'space-between' }}
           >
-            <div className="flex items-center gap-2.5">
-              <CheckSquare className="h-4 w-4 shrink-0 text-neutral-400" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <CheckSquare size={14} style={iconStyle} />
               <span>Selecionar tudo</span>
             </div>
-            <kbd className="text-[11px] text-neutral-500">Ctrl+A</kbd>
+            <kbd style={kbdStyle}>Ctrl+A</kbd>
           </button>
         </div>
       )}
 
       {/* 5. AÇÕES GERAIS DE NAVEGAÇÃO & PÁGINA */}
-      <div className="space-y-0.5">
-        <div className="flex items-center justify-between px-1 py-1 gap-1 border-b border-white/10 mb-1">
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 2, gap: 4, borderBottom: '1px solid var(--border-hairline)', marginBottom: 4 }}>
           <button
             onClick={() => {
               onGoBack(data.tabId);
               onClose();
             }}
-            title="Voltar"
-            className="flex-1 flex items-center justify-center p-1.5 rounded-lg text-neutral-300 hover:bg-white/10 hover:text-white transition-colors"
+            title="Voltar (Alt+Seta Esquerda)"
+            style={navBtnStyle}
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft size={14} />
           </button>
           <button
             onClick={() => {
               onGoForward(data.tabId);
               onClose();
             }}
-            title="Avançar"
-            className="flex-1 flex items-center justify-center p-1.5 rounded-lg text-neutral-300 hover:bg-white/10 hover:text-white transition-colors"
+            title="Avançar (Alt+Seta Direita)"
+            style={navBtnStyle}
           >
-            <ArrowRight className="h-4 w-4" />
+            <ArrowRight size={14} />
           </button>
           <button
             onClick={() => {
@@ -345,9 +356,9 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
               onClose();
             }}
             title="Recarregar (Ctrl+R)"
-            className="flex-1 flex items-center justify-center p-1.5 rounded-lg text-neutral-300 hover:bg-white/10 hover:text-white transition-colors"
+            style={navBtnStyle}
           >
-            <RefreshCw className="h-4 w-4" />
+            <RefreshCw size={14} />
           </button>
         </div>
 
@@ -356,9 +367,9 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
             onToggleReaderMode();
             onClose();
           }}
-          className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+          style={itemStyle}
         >
-          <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
+          <FileText size={14} style={iconStyle} />
           <span>Modo Leitura</span>
         </button>
 
@@ -367,9 +378,9 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
             onTranslatePage();
             onClose();
           }}
-          className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+          style={itemStyle}
         >
-          <Languages className="h-4 w-4 shrink-0 text-neutral-400" />
+          <Languages size={14} style={iconStyle} />
           <span>Traduzir página</span>
         </button>
 
@@ -378,13 +389,13 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
             onPrintPage();
             onClose();
           }}
-          className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+          style={{ ...itemStyle, justifyContent: 'space-between' }}
         >
-          <div className="flex items-center gap-2.5">
-            <Printer className="h-4 w-4 shrink-0 text-neutral-400" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Printer size={14} style={iconStyle} />
             <span>Imprimir</span>
           </div>
-          <kbd className="text-[11px] text-neutral-500">Ctrl+P</kbd>
+          <kbd style={kbdStyle}>Ctrl+P</kbd>
         </button>
 
         <button
@@ -392,15 +403,67 @@ export const WebContextMenu: React.FC<WebContextMenuProps> = ({
             onInspectElement(data.tabId, data.x, data.y);
             onClose();
           }}
-          className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-neutral-200 hover:bg-white/10 transition-colors"
+          style={{ ...itemStyle, justifyContent: 'space-between' }}
         >
-          <div className="flex items-center gap-2.5">
-            <Code className="h-4 w-4 shrink-0 text-neutral-400" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Code size={14} style={iconStyle} />
             <span>Inspecionar elemento</span>
           </div>
-          <kbd className="text-[11px] text-neutral-500">Ctrl+Shift+I</kbd>
+          <kbd style={kbdStyle}>Ctrl+Shift+I</kbd>
         </button>
       </div>
     </div>
   );
+};
+
+const sectionStyle: React.CSSProperties = {
+  borderBottom: '1px solid var(--border-hairline)',
+  paddingBottom: 4,
+  marginBottom: 4
+};
+
+const itemStyle: React.CSSProperties = {
+  display: 'flex',
+  width: '100%',
+  alignItems: 'center',
+  gap: 10,
+  borderRadius: 8,
+  padding: '6px 10px',
+  textAlign: 'left',
+  background: 'transparent',
+  color: 'var(--text-primary)',
+  fontSize: 12.5,
+  cursor: 'pointer',
+  transition: 'background 0.15s ease'
+};
+
+const iconStyle: React.CSSProperties = {
+  color: 'var(--text-secondary)',
+  flexShrink: 0
+};
+
+const navBtnStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '6px',
+  borderRadius: 6,
+  background: 'var(--bg-elevated)',
+  color: 'var(--text-primary)',
+  cursor: 'pointer'
+};
+
+const kbdStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  color: 'var(--text-tertiary)',
+  background: 'var(--bg-elevated)',
+  padding: '2px 5px',
+  borderRadius: 4
+};
+
+const truncateStyle: React.CSSProperties = {
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis'
 };
