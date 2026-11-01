@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Minus, Square, Copy, X, Download, CheckCircle2, FolderOpen, ArrowUpCircle } from 'lucide-react';
+import { Minus, Square, Copy, X, Download, CheckCircle2, FolderOpen, ArrowUpCircle, ExternalLink } from 'lucide-react';
 import type { DownloadItem } from '../shared/types';
 
 interface WindowChromeOverlayProps {
@@ -23,6 +23,8 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
     status: string;
     version?: string;
     releaseNotes?: string;
+    downloadUrl?: string;
+    isPortable?: boolean;
   } | null>(null);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
 
@@ -32,7 +34,13 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
     if (window.tesseraApi?.onUpdateStatus) {
       const unsub = window.tesseraApi.onUpdateStatus((payload) => {
         if (payload.status === 'downloaded' || payload.status === 'downloading' || payload.status === 'available') {
-          setUpdateInfo({ status: payload.status, version: payload.version, releaseNotes: payload.releaseNotes });
+          setUpdateInfo({
+            status: payload.status,
+            version: payload.version,
+            releaseNotes: payload.releaseNotes,
+            downloadUrl: payload.downloadUrl,
+            isPortable: payload.isPortable
+          });
         }
       });
       return () => unsub();
@@ -158,18 +166,32 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
                     style={{
                       fontSize: 9.5,
                       fontWeight: 600,
-                      color: updateInfo.status === 'downloaded' ? '#34C759' : '#007AFF',
-                      background: updateInfo.status === 'downloaded' ? 'rgba(52, 199, 89, 0.15)' : 'rgba(0, 122, 255, 0.15)',
+                      color:
+                        updateInfo.status === 'downloaded'
+                          ? '#34C759'
+                          : updateInfo.status === 'available'
+                          ? '#34C759'
+                          : '#007AFF',
+                      background:
+                        updateInfo.status === 'downloaded' || updateInfo.status === 'available'
+                          ? 'rgba(52, 199, 89, 0.15)'
+                          : 'rgba(0, 122, 255, 0.15)',
                       padding: '2px 6px',
                       borderRadius: 6
                     }}
                   >
-                    {updateInfo.status === 'downloaded' ? 'Pronto' : 'Baixando...'}
+                    {updateInfo.status === 'downloaded'
+                      ? 'Pronto'
+                      : updateInfo.status === 'available'
+                      ? 'Nova Versão'
+                      : 'Baixando...'}
                   </span>
                 </div>
                 <p style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
                   {updateInfo.status === 'downloaded'
                     ? 'Uma nova atualização foi baixada e está pronta para ser aplicada.'
+                    : updateInfo.status === 'available'
+                    ? `Uma nova versão (${updateInfo.version ? `v${updateInfo.version}` : ''}) está disponível no canal oficial.`
                     : 'Baixando atualização em segundo plano...'}
                 </p>
                 {updateInfo.status === 'downloaded' ? (
@@ -195,6 +217,34 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
                   >
                     <ArrowUpCircle size={13} />
                     <span>Reiniciar e Atualizar</span>
+                  </button>
+                ) : updateInfo.downloadUrl ? (
+                  <button
+                    onClick={() => {
+                      if (updateInfo.downloadUrl) {
+                        window.tesseraApi?.openExternalUrl(updateInfo.downloadUrl);
+                      }
+                    }}
+                    style={{
+                      padding: '7px 10px',
+                      borderRadius: 9,
+                      background: 'var(--accent-primary)',
+                      color: '#FFF',
+                      fontWeight: 600,
+                      fontSize: 11.5,
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      transition: 'opacity 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+                  >
+                    <ExternalLink size={13} />
+                    <span>Baixar Versão Oficial</span>
                   </button>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-tertiary)', padding: '4px 0' }}>

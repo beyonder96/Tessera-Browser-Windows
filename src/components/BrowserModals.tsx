@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Plus,
@@ -32,7 +32,8 @@ import {
   ExternalLink,
   Code,
   Copy,
-  Sparkles
+  Sparkles,
+  RefreshCw
 } from 'lucide-react';
 import type {
   BrowserSettings,
@@ -1067,6 +1068,62 @@ export const FullSettingsModal: React.FC<{
   const [showDevOptions, setShowDevOptions] = useState(false);
   const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
+  const [systemInfo, setSystemInfo] = useState<{
+    appVersion: string;
+    chromeVersion: string;
+    electronVersion: string;
+    nodeVersion: string;
+    arch: string;
+    isPackaged: boolean;
+  }>({
+    appVersion: '1.0.4',
+    chromeVersion: '156.0.8078.75',
+    electronVersion: '45.2.1',
+    nodeVersion: '24.22.1',
+    arch: 'Windows x64',
+    isPackaged: true
+  });
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<
+    'idle' | 'checking' | 'up-to-date' | 'update-available' | 'error'
+  >('idle');
+  const [updateDetails, setUpdateDetails] = useState<{
+    latestVersion?: string;
+    releaseNotes?: string;
+    downloadUrl?: string;
+    error?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (visible && window.tesseraApi?.getSystemInfo) {
+      window.tesseraApi.getSystemInfo().then(setSystemInfo).catch(() => {});
+    }
+  }, [visible]);
+
+  const handleCheckForUpdates = async () => {
+    if (!window.tesseraApi?.checkForUpdates || updateCheckStatus === 'checking') return;
+    setUpdateCheckStatus('checking');
+    try {
+      const res = await window.tesseraApi.checkForUpdates();
+      if (res.status === 'update-available') {
+        setUpdateCheckStatus('update-available');
+        setUpdateDetails({
+          latestVersion: res.latestVersion,
+          releaseNotes: res.releaseNotes,
+          downloadUrl: res.downloadUrl
+        });
+      } else if (res.status === 'up-to-date') {
+        setUpdateCheckStatus('up-to-date');
+        setUpdateDetails({ latestVersion: res.latestVersion });
+        setTimeout(() => setUpdateCheckStatus('idle'), 5000);
+      } else {
+        setUpdateCheckStatus('error');
+        setUpdateDetails({ error: res.error });
+      }
+    } catch (err: any) {
+      setUpdateCheckStatus('error');
+      setUpdateDetails({ error: err?.message || 'Erro ao checar atualizações' });
+    }
+  };
 
   if (!visible) return null;
 
@@ -1081,7 +1138,7 @@ export const FullSettingsModal: React.FC<{
           <div>
             <h3 style={{ fontSize: 18, fontWeight: 700 }}>Configurações do Tessera Browser</h3>
             <p style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-              Tessera Browser for Windows v1.0.0 • Motor Chromium
+              Tessera Browser for Windows v{systemInfo.appVersion} • Motor Chromium
             </p>
           </div>
           <button onClick={onClose} style={closeCircleStyle}>
@@ -1319,7 +1376,7 @@ export const FullSettingsModal: React.FC<{
                   color: '#FFFFFF'
                 }}
               >
-                v1.0.1
+                v{systemInfo.appVersion}
               </span>
             </div>
             <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2 }}>
@@ -1464,20 +1521,89 @@ export const FullSettingsModal: React.FC<{
               >
                 <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--bg-elevated)' }}>
                   <span style={{ color: 'var(--text-tertiary)' }}>Motor Chromium:</span>{' '}
-                  <b>132.0.6834.196</b>
+                  <b>{systemInfo.chromeVersion}</b>
                 </div>
                 <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--bg-elevated)' }}>
                   <span style={{ color: 'var(--text-tertiary)' }}>Electron Runtime:</span>{' '}
-                  <b>v34.2.0</b>
+                  <b>v{systemInfo.electronVersion}</b>
                 </div>
                 <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--bg-elevated)' }}>
                   <span style={{ color: 'var(--text-tertiary)' }}>Node.js:</span>{' '}
-                  <b>v22.14.0</b>
+                  <b>v{systemInfo.nodeVersion}</b>
                 </div>
                 <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--bg-elevated)' }}>
                   <span style={{ color: 'var(--text-tertiary)' }}>Arquitetura:</span>{' '}
-                  <b>Windows x64</b>
+                  <b>{systemInfo.arch}</b>
                 </div>
+              </div>
+
+              {/* Real Official Update Checker Card */}
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 14,
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-hairline)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <RefreshCw size={14} className={updateCheckStatus === 'checking' ? 'spin' : ''} />
+                    <span>Atualizações do Tessera</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2 }}>
+                    {updateCheckStatus === 'checking' && 'Consultando GitHub Releases e servidores oficiais...'}
+                    {updateCheckStatus === 'up-to-date' &&
+                      `✓ Seu navegador está na versão mais recente (v${systemInfo.appVersion})`}
+                    {updateCheckStatus === 'update-available' &&
+                      `▲ Nova versão v${updateDetails?.latestVersion} pronta no GitHub!`}
+                    {updateCheckStatus === 'error' &&
+                      `Erro: ${updateDetails?.error || 'Não foi possível verificar agora'}`}
+                    {updateCheckStatus === 'idle' &&
+                      `Canal estável oficial (GitHub: beyonder96/Tessera-Browser-Windows)`}
+                  </div>
+                </div>
+
+                {updateCheckStatus === 'update-available' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (updateDetails?.downloadUrl) {
+                        window.tesseraApi?.openExternalUrl(updateDetails.downloadUrl);
+                      } else {
+                        window.tesseraApi?.quitAndInstallUpdate();
+                      }
+                    }}
+                    style={{
+                      ...primaryPillBtn,
+                      fontSize: 11.5,
+                      padding: '6px 14px',
+                      background: '#34C759',
+                      color: '#FFF'
+                    }}
+                  >
+                    <span>Baixar v{updateDetails?.latestVersion}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={updateCheckStatus === 'checking'}
+                    onClick={handleCheckForUpdates}
+                    style={{
+                      ...secondaryPillBtn,
+                      fontSize: 11.5,
+                      padding: '6px 14px',
+                      opacity: updateCheckStatus === 'checking' ? 0.7 : 1
+                    }}
+                  >
+                    <RefreshCw size={13} className={updateCheckStatus === 'checking' ? 'spin' : ''} />
+                    <span>{updateCheckStatus === 'checking' ? 'Verificando...' : 'Verificar Atualizações'}</span>
+                  </button>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -1485,7 +1611,7 @@ export const FullSettingsModal: React.FC<{
                 <button
                   type="button"
                   onClick={() => {
-                    const diag = `=== TESSERA BROWSER DIAGNOSTICS ===\nApp: Tessera Browser v1.0.1 (Windows x64)\nElectron: 34.2.0\nChromium: 132.0.6834.196\nNode: 22.14.0\nTheme: ${settings.isDarkMode ? 'Dark' : 'Light'}\nAdBlock: ${settings.adBlockEnabled}\nSearch: ${settings.searchEngine}\nTimestamp: ${new Date().toISOString()}`;
+                    const diag = `=== TESSERA BROWSER DIAGNOSTICS ===\nApp: Tessera Browser v${systemInfo.appVersion} (${systemInfo.arch})\nElectron: ${systemInfo.electronVersion}\nChromium: ${systemInfo.chromeVersion}\nNode: ${systemInfo.nodeVersion}\nPacote Instalado: ${systemInfo.isPackaged ? 'Sim (NSIS)' : 'Não (Local/Dev)'}\nTheme: ${settings.isDarkMode ? 'Dark' : 'Light'}\nAdBlock: ${settings.adBlockEnabled}\nSearch: ${settings.searchEngine}\nTimestamp: ${new Date().toISOString()}`;
                     navigator.clipboard.writeText(diag);
                     setCopiedDiagnostics(true);
                     setTimeout(() => setCopiedDiagnostics(false), 2000);

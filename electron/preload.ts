@@ -11,7 +11,27 @@ import type {
 } from '../src/shared/types';
 import type { BlockedRequestPayload } from './privacyEngine';
 
+export interface SystemInfo {
+  appVersion: string;
+  chromeVersion: string;
+  electronVersion: string;
+  nodeVersion: string;
+  arch: string;
+  isPackaged: boolean;
+}
+
+export interface ManualUpdateCheckResult {
+  success: boolean;
+  status: 'up-to-date' | 'update-available' | 'error';
+  currentVersion: string;
+  latestVersion?: string;
+  releaseNotes?: string;
+  downloadUrl?: string;
+  error?: string;
+}
+
 export interface TesseraDesktopApi {
+  getSystemInfo: () => Promise<SystemInfo>;
   getWebviewPreloadPath: () => Promise<string>;
   windowMinimize: () => void;
   windowToggleMaximize: () => Promise<boolean>;
@@ -93,11 +113,11 @@ export interface TesseraDesktopApi {
   translateTexts: (texts: string[], targetLang?: string) => Promise<string[]>;
   getGoogleAccountStatus: () => Promise<{ isAuthenticated: boolean; email?: string }>;
   clearGoogleAuthCookies: (partitionName?: string) => Promise<{ success: boolean }>;
-  checkForUpdates: () => Promise<{ success: boolean; error?: string }>;
+  checkForUpdates: () => Promise<ManualUpdateCheckResult>;
   quitAndInstallUpdate: () => Promise<void>;
-  getUpdateStatus: () => Promise<{ status: string; version?: string; releaseNotes?: string; error?: string }>;
+  getUpdateStatus: () => Promise<{ status: string; version?: string; releaseNotes?: string; downloadUrl?: string; isPortable?: boolean; error?: string }>;
   onUpdateStatus: (
-    cb: (payload: { status: string; version?: string; releaseNotes?: string; error?: string }) => void
+    cb: (payload: { status: string; version?: string; releaseNotes?: string; downloadUrl?: string; isPortable?: boolean; error?: string }) => void
   ) => () => void;
   onTrackerBlocked: (cb: (payload: BlockedRequestPayload) => void) => () => void;
   onDownloadUpdated: (cb: (item: DownloadItem) => void) => () => void;
@@ -115,6 +135,7 @@ export interface TesseraDesktopApi {
 }
 
 const api: TesseraDesktopApi = {
+  getSystemInfo: () => ipcRenderer.invoke('tessera:get-system-info'),
   getWebviewPreloadPath: () => ipcRenderer.invoke('tessera:get-webview-preload-path'),
   windowMinimize: () => ipcRenderer.send('tessera:window-minimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('tessera:window-toggle-maximize'),

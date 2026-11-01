@@ -410,6 +410,17 @@ app.whenReady().then(async () => {
     return pathToFileURL(webviewPreloadPath).href;
   });
 
+  ipcMain.handle('tessera:get-system-info', () => {
+    return {
+      appVersion: app.getVersion(),
+      chromeVersion: process.versions.chrome || '156.0.8078.75',
+      electronVersion: process.versions.electron || '45.2.1',
+      nodeVersion: process.versions.node || process.version,
+      arch: process.arch === 'x64' ? 'Windows x64' : `Windows ${process.arch}`,
+      isPackaged: app.isPackaged
+    };
+  });
+
   ipcMain.on('tessera:window-minimize', () => mainWindow?.minimize());
   ipcMain.handle('tessera:window-toggle-maximize', () => {
     if (!mainWindow) return false;
