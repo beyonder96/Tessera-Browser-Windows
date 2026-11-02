@@ -255,17 +255,27 @@ app.whenReady().then(async () => {
     });
   }
 
+  function parseFeatureDimension(features: string, key: string, fallback: number): number {
+    const match = new RegExp(`${key}=(\\d+)`, 'i').exec(features);
+    if (match && match[1]) {
+      const val = parseInt(match[1], 10);
+      if (!isNaN(val) && val >= 320 && val <= 1920) return val;
+    }
+    return fallback;
+  }
+
   // Intercept popups & auxiliary windows (window.open / target="_blank") inside <webview> guests
   app.on('web-contents-created', (_ev, contents) => {
     registerShortcutInterceptor(contents);
     contents.setUserAgent(getStandardChromiumUserAgent());
-    if (contents.getType() === 'webview') {
+    if (contents.getType() === 'webview' || contents.getType() === 'window') {
       contents.setWindowOpenHandler((details) => {
         const url = details.url;
         const isOAuthPopupUrl =
-          /^https:\/\/(accounts\.google\.com\/(o\/oauth2|gsi|ServiceLogin)|login\.microsoftonline\.com|appleid\.apple\.com)/i.test(
+          /^https:\/\/([^/]+\.)?(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth)/i.test(
             url
-          );
+          ) || /[?&](client_id|response_type|redirect_uri|scope)=/i.test(url);
+
         // Check if this is a popup window test, OAuth popup, or auxiliary window with dimensions
         const isPopupTestOrAuxiliary =
           url === 'about:blank' ||
@@ -275,16 +285,29 @@ app.whenReady().then(async () => {
           isOAuthPopupUrl;
 
         if (isPopupTestOrAuxiliary) {
+          const width = details.features
+            ? parseFeatureDimension(details.features, 'width', isOAuthPopupUrl ? 600 : 900)
+            : isOAuthPopupUrl
+              ? 600
+              : 900;
+          const height = details.features
+            ? parseFeatureDimension(details.features, 'height', isOAuthPopupUrl ? 720 : 680)
+            : isOAuthPopupUrl
+              ? 720
+              : 680;
+
           // Allow popup creation sharing the exact Space session/cookies (contents.session)
-          // so OAuth popups (Google Sign-In) and ERP/CalcGraf window.open work natively!
+          // with native window frame so OAuth popups (Google Sign-In) and ERP window.open work natively!
           return {
             action: 'allow',
             overrideBrowserWindowOptions: {
               parent: mainWindow ?? undefined,
               modal: false,
+              frame: true, // Native title bar with minimize/maximize/close controls
               autoHideMenuBar: true,
-              width: 900,
-              height: 680,
+              center: true,
+              width,
+              height,
               webPreferences: {
                 session: contents.session,
                 preload: webviewPreloadPath,
@@ -306,6 +329,14 @@ app.whenReady().then(async () => {
         }
         return { action: 'deny' };
       });
+    }
+  });
+
+  // Handle any secondary popup BrowserWindows created via setWindowOpenHandler
+  app.on('browser-window-created', (_ev, win) => {
+    if (win !== mainWindow) {
+      win.webContents.setUserAgent(getStandardChromiumUserAgent());
+      registerShortcutInterceptor(win.webContents);
     }
   });
 

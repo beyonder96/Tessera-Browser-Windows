@@ -76,7 +76,7 @@ export function buildChromeMainWorldCompatScript(chromeMajor: string, chromeFull
 
       if (navigator.userAgentData) {
         const proto = Object.getPrototypeOf(navigator.userAgentData);
-        if (proto) {
+        if (proto && proto !== Object.prototype) {
           Object.defineProperty(proto, 'brands', {
             get: function() { return brandList; },
             configurable: true,
@@ -164,6 +164,44 @@ export function buildChromeMainWorldCompatScript(chromeMajor: string, chromeFull
           };
         };
       }
+
+      // Suppress intrusive Windows Security Passkey prompt on conditional mediation
+      if (typeof window !== 'undefined' && window.PublicKeyCredential) {
+        try {
+          window.PublicKeyCredential.isConditionalMediationAvailable = async function() {
+            return false;
+          };
+        } catch (e) {}
+      }
+
+      // Intercept navigator.credentials.get for conditional passkeys & FedCM
+      if (navigator.credentials && typeof navigator.credentials.get === 'function') {
+        try {
+          const origCredentialsGet = navigator.credentials.get.bind(navigator.credentials);
+          navigator.credentials.get = function(options) {
+            if (options && options.mediation === 'conditional') {
+              return new Promise(function(_, reject) {
+                if (options.signal) {
+                  options.signal.addEventListener('abort', function() {
+                    reject(new DOMException('The user canceled the operation or aborted.', 'AbortError'));
+                  });
+                }
+              });
+            }
+            if (options && options.identity) {
+              return Promise.reject(new DOMException('Federated credential mediation is not supported in this environment', 'NotSupportedError'));
+            }
+            return origCredentialsGet(options);
+          };
+        } catch (e) {}
+      }
+
+      // Disable IdentityCredential so Google Identity Services (GSI) immediately chooses popup flow
+      try {
+        if ('IdentityCredential' in window) {
+          delete window.IdentityCredential;
+        }
+      } catch (e) {}
     } catch (e) {}
   })();`;
 }
@@ -224,7 +262,7 @@ export class PrivacyShieldController {
           {
             manifest_version: 3,
             name: 'Chromium Web Compatibility',
-            version: '1.0.4',
+            version: '1.0.5',
             content_scripts: [
               {
                 matches: ['<all_urls>'],

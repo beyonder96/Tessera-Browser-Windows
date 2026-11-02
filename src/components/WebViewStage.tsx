@@ -539,10 +539,35 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       });
 
       el.addEventListener('new-window', (e: Event) => {
-        const newWinEv = e as unknown as { url?: string };
-        if (newWinEv.url && !newWinEv.url.startsWith('about:blank')) {
-          latestPropsRef.current.onOpenNewTab?.(newWinEv.url, tab.isIncognito);
+        const newWinEv = e as unknown as {
+          url?: string;
+          disposition?: string;
+          options?: { width?: number; height?: number };
+        };
+        const targetUrl = newWinEv.url || '';
+        if (!targetUrl || targetUrl.startsWith('about:blank')) {
+          // Handled natively by Electron's setWindowOpenHandler
+          return;
         }
+
+        const isOAuthUrl =
+          /^https:\/\/([^/]+\.)?(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth)/i.test(
+            targetUrl
+          ) || /[?&](client_id|response_type|redirect_uri|scope)=/i.test(targetUrl);
+
+        const hasPopupDimensions =
+          Boolean(newWinEv.options && (newWinEv.options.width || newWinEv.options.height));
+        const isPopupWindow =
+          newWinEv.disposition === 'new-window' || hasPopupDimensions || isOAuthUrl;
+
+        // If it's an OAuth popup or auxiliary dialog, let Electron's setWindowOpenHandler
+        // spawn the native BrowserWindow child with window.opener intact!
+        if (isPopupWindow) {
+          return;
+        }
+
+        // Standard target="_blank" navigations open cleanly as a tab in Tessera Browser
+        latestPropsRef.current.onOpenNewTab?.(targetUrl, tab.isIncognito);
       });
 
       el.addEventListener('media-started-playing', () => {

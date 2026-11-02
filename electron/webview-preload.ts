@@ -25,7 +25,7 @@ try {
         // 1. Patch NavigatorUAData.prototype so instanceof NavigatorUAData & Object.prototype.toString remain 100% native
         if (navigator.userAgentData) {
           const proto = Object.getPrototypeOf(navigator.userAgentData);
-          if (proto) {
+          if (proto && proto !== Object.prototype) {
             Object.defineProperty(proto, 'brands', {
               get: function() { return brandList; },
               configurable: true,
@@ -115,6 +115,48 @@ try {
             };
           };
         }
+
+        // 4. Suppress intrusive OS-level Windows Security Passkey prompt on conditional mediation
+        // In Electron, PublicKeyCredential.isConditionalMediationAvailable() triggers Windows Hello modal
+        // instead of an in-page autofill dropdown. Setting this to false informs Reddit/Google/LinkedIn
+        // to render standard login forms without popping modal security dialogs on load.
+        if (typeof window !== 'undefined' && window.PublicKeyCredential) {
+          try {
+            window.PublicKeyCredential.isConditionalMediationAvailable = async function() {
+              return false;
+            };
+          } catch (e) {}
+        }
+
+        // 5. Intercept navigator.credentials.get for conditional passkeys & FedCM
+        if (navigator.credentials && typeof navigator.credentials.get === 'function') {
+          try {
+            const origCredentialsGet = navigator.credentials.get.bind(navigator.credentials);
+            navigator.credentials.get = function(options) {
+              if (options && options.mediation === 'conditional') {
+                return new Promise(function(_, reject) {
+                  if (options.signal) {
+                    options.signal.addEventListener('abort', function() {
+                      reject(new DOMException('The user canceled the operation or aborted.', 'AbortError'));
+                    });
+                  }
+                });
+              }
+              if (options && options.identity) {
+                // FedCM without native browser sheet hangs or fails. Reject so GSI falls back to OAuth popup!
+                return Promise.reject(new DOMException('Federated credential mediation is not supported in this environment', 'NotSupportedError'));
+              }
+              return origCredentialsGet(options);
+            };
+          } catch (e) {}
+        }
+
+        // 6. Disable IdentityCredential so Google Identity Services (GSI) immediately chooses popup flow
+        try {
+          if ('IdentityCredential' in window) {
+            delete (window as any).IdentityCredential;
+          }
+        } catch (e) {}
       } catch (err) {}
     })();
   `;
@@ -124,8 +166,13 @@ try {
   // Silent fallback
 }
 
-// Guest preload host-bridge listeners run only in the top-level main frame (not in sub-iframes).
-if (process.isMainFrame !== false) {
+// Guest preload host-bridge listeners run only in the top-level main frame (not in sub-iframes)
+// and only inside genuine <webview> guests (avoiding crashes in auxiliary popup BrowserWindows).
+const canSendToHost =
+  typeof (ipcRenderer as unknown as { sendToHost?: unknown }).sendToHost === 'function' &&
+  typeof (process as unknown as { guestInstanceId?: unknown }).guestInstanceId !== 'undefined';
+
+if (process.isMainFrame !== false && canSendToHost) {
   let lastScrollY = 0;
   let lastSentAt = 0;
 

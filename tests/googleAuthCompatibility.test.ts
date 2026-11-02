@@ -58,10 +58,48 @@ describe('Google Sign-In & Chromium Auth Compatibility', () => {
     expect(Object.keys(low)).toHaveLength(3);
   });
 
-  it('gera script de compatibilidade Main World preservando o protótipo NavigatorUAData', () => {
+  it('gera script de compatibilidade Main World preservando o protótipo NavigatorUAData e suprimindo Passkey condicional', () => {
     const script = buildChromeMainWorldCompatScript('132', '132.0.6834.210');
     expect(script).toContain('Object.getPrototypeOf(navigator.userAgentData)');
     expect(script).toContain('132.0.6834.210');
     expect(script).toContain('Google Chrome');
+    expect(script).toContain('PublicKeyCredential.isConditionalMediationAvailable');
+    expect(script).toContain('return false');
+    expect(script).toContain('mediation === \'conditional\'');
+    expect(script).toContain('options.identity');
+    expect(script).toContain('IdentityCredential');
+  });
+
+  it('valida que o script de compatibilidade desativa mediação condicional do WebAuthn', async () => {
+    const script = buildChromeMainWorldCompatScript('156', '156.0.8078.75');
+    class MockUAData {}
+    const mockWindow: any = {
+      PublicKeyCredential: {
+        isConditionalMediationAvailable: async () => true
+      },
+      IdentityCredential: function() {},
+      navigator: {
+        userAgentData: new MockUAData(),
+        credentials: {
+          get: vi.fn()
+        }
+      }
+    };
+
+    const fn = new Function('window', 'navigator', `${script}`);
+    fn(mockWindow, mockWindow.navigator);
+
+    expect(await mockWindow.PublicKeyCredential.isConditionalMediationAvailable()).toBe(false);
+    expect(mockWindow.IdentityCredential).toBeUndefined();
+
+    // Testa chamada de mediação condicional interceptada sem lançar erro nem chamar get original
+    const conditionalPromise = mockWindow.navigator.credentials.get({ mediation: 'conditional' });
+    expect(mockWindow.navigator.credentials.get).toBeDefined();
+    expect(conditionalPromise).toBeInstanceOf(Promise);
+
+    // Testa chamada com identity (FedCM) rejeitada com NotSupportedError para ativar fallback de popup
+    await expect(mockWindow.navigator.credentials.get({ identity: {} })).rejects.toThrow(
+      /Federated credential mediation is not supported/
+    );
   });
 });
