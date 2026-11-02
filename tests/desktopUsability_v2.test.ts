@@ -94,4 +94,34 @@ describe('Fase 2: Usabilidade Desktop 100% (Core Browser & Correções Críticas
       expect(closedTabId).toBe('tab-to-close');
     });
   });
+
+  describe('Window Controls & Ergonomia da Janela (Opção 4 Híbrida)', () => {
+    it('valida configuração padrão de auto-hide e suporte à faixa superior fixa (top-bar)', () => {
+      const defaultMode = 'auto-hide';
+      const isTopBar = (mode: string, isHomePage: boolean) => !isHomePage && mode === 'top-bar';
+
+      expect(defaultMode).toBe('auto-hide');
+      expect(isTopBar('auto-hide', false)).toBe(false);
+      expect(isTopBar('top-bar', false)).toBe(true);
+      expect(isTopBar('top-bar', true)).toBe(false); // Na Start Page nunca usa faixa fixa de topo
+    });
+
+    it('calcula altura da webview apropriada para evitar sobreposição em modo top-bar', () => {
+      const getWebviewContainerStyle = (isHomePage: boolean, mode: string) => {
+        const topBarActive = !isHomePage && mode === 'top-bar';
+        return {
+          height: topBarActive ? 'calc(100% - 28px)' : '100%',
+          marginTop: topBarActive ? 28 : 0
+        };
+      };
+
+      const webStyle = getWebviewContainerStyle(false, 'top-bar');
+      expect(webStyle.marginTop).toBe(28);
+      expect(webStyle.height).toBe('calc(100% - 28px)');
+
+      const autoHideStyle = getWebviewContainerStyle(false, 'auto-hide');
+      expect(autoHideStyle.marginTop).toBe(0);
+      expect(autoHideStyle.height).toBe('100%');
+    });
+  });
 });

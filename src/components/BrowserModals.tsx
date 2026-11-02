@@ -33,7 +33,8 @@ import {
   Code,
   Copy,
   Sparkles,
-  RefreshCw
+  RefreshCw,
+  AppWindow
 } from 'lucide-react';
 import type {
   BrowserSettings,
@@ -868,6 +869,16 @@ export const QuickSettingsPanel: React.FC<{
             title="Barra rápida de favoritos"
             checked={settings.showFavoritesBar}
             onChange={(v) => onUpdateSettings({ showFavoritesBar: v })}
+          />
+          <ToggleRow
+            icon={<AppWindow size={15} />}
+            title={
+              settings.windowControlsMode === 'top-bar'
+                ? 'Controles da Janela: Faixa Superior Fixa (28px)'
+                : 'Controles da Janela: Auto-ocultar (Aparece ao passar o mouse)'
+            }
+            checked={settings.windowControlsMode === 'top-bar'}
+            onChange={(v) => onUpdateSettings({ windowControlsMode: v ? 'top-bar' : 'auto-hide' })}
           />
           <ToggleRow
             icon={<Mic size={15} style={{ color: settings.voiceActivationEnabled ? '#34C759' : undefined }} />}

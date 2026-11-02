@@ -1038,6 +1038,7 @@ export const App: React.FC = () => {
         <WindowChromeOverlay
           isHomePage={activeTab.isHomePage}
           isIncognito={isIncognitoMode}
+          windowControlsMode={settings.windowControlsMode}
           activeDownloadBanner={activeDownloadBanner}
           onDismissDownloadBanner={() => setActiveDownloadBanner(null)}
           onOpenDownloadsHub={() => {
@@ -1087,7 +1088,14 @@ export const App: React.FC = () => {
         />
       </div>
 
-      <div style={{ width: '100%', height: '100%', display: activeTab.isHomePage ? 'none' : 'block' }}>
+      <div
+        style={{
+          width: '100%',
+          height: !activeTab.isHomePage && settings.windowControlsMode === 'top-bar' ? 'calc(100% - 28px)' : '100%',
+          marginTop: !activeTab.isHomePage && settings.windowControlsMode === 'top-bar' ? 28 : 0,
+          display: activeTab.isHomePage ? 'none' : 'block'
+        }}
+      >
         <WebViewStage
           ref={webStageRef}
           tabs={tabs}

@@ -4,6 +4,8 @@ export type AiProviderId = 'GEMINI' | 'GROQ';
 
 export type AirBarPosition = 'bottom' | 'top';
 
+export type WindowControlsMode = 'auto-hide' | 'top-bar';
+
 export type ReaderTheme = 'LIGHT' | 'SEPIA' | 'DARK' | 'AMOLED';
 export type ReaderFontFamily = 'SERIF' | 'SANS_SERIF' | 'MONOSPACE';
 export type ReaderBlockType = 'H1' | 'H2' | 'H3' | 'PARAGRAPH' | 'BLOCKQUOTE' | 'LIST_ITEM' | 'IMAGE';
@@ -250,6 +252,7 @@ export interface BrowserSettings {
   readerShowImages: boolean;
   voiceActivationEnabled: boolean;
   voiceWakeWord: string;
+  windowControlsMode?: WindowControlsMode;
 }
 
 export type VoiceAssistantStatus = 'idle' | 'listening' | 'processing' | 'speaking' | 'error';

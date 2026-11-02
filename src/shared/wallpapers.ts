@@ -194,7 +194,8 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
   readerFontSizePx: 19,
   readerShowImages: true,
   voiceActivationEnabled: false,
-  voiceWakeWord: 'tessera'
+  voiceWakeWord: 'tessera',
+  windowControlsMode: 'auto-hide'
 };
 
 export function argbToHex(argb: number, fallback = '#0288D1'): string {

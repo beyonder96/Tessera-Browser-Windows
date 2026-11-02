@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Minus, Square, Copy, X, Download, CheckCircle2, FolderOpen, ArrowUpCircle, ExternalLink } from 'lucide-react';
-import type { DownloadItem } from '../shared/types';
+import type { DownloadItem, WindowControlsMode } from '../shared/types';
 
 interface WindowChromeOverlayProps {
   isHomePage: boolean;
   isIncognito: boolean;
+  windowControlsMode?: WindowControlsMode;
   activeDownloadBanner: DownloadItem | null;
   onDismissDownloadBanner: () => void;
   onOpenDownloadsHub: () => void;
@@ -13,12 +14,16 @@ interface WindowChromeOverlayProps {
 export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
   isHomePage,
   isIncognito,
+  windowControlsMode = 'auto-hide',
   activeDownloadBanner,
   onDismissDownloadBanner,
   onOpenDownloadsHub
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [isRevealed, setIsRevealed] = useState(false);
+  const hideTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const [updateInfo, setUpdateInfo] = useState<{
     status: string;
     version?: string;
@@ -52,244 +57,337 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
     setIsMaximized(next);
   };
 
-  return (
-    <>
-      {/* Ultra-slim top drag strip: 26px on StartPage, 6px on WebPages so website headers/navbars remain 100% clickable */}
-      <div
-        className="app-drag-region"
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 132,
-          height: isHomePage ? 28 : 6,
-          zIndex: 90
-        }}
-      />
+  const handleMouseEnterTrigger = () => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+    setIsRevealed(true);
+  };
 
-      {/* Discreet Windows Control Pill at top-right */}
-      <div
-        className="app-no-drag"
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{
-          position: 'fixed',
-          top: 8,
-          right: 10,
-          zIndex: 95,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 2,
-          padding: '3px 5px',
-          borderRadius: 999,
-          background: 'var(--bg-surface)',
-          border: '1px solid var(--border-hairline)',
-          boxShadow: hovered ? 'var(--shadow-floating)' : 'none',
-          opacity: isHomePage || hovered ? 0.96 : 0.42,
-          transition: 'opacity 0.2s ease, box-shadow 0.2s ease'
-        }}
-      >
-        {isIncognito && (
-          <span
+  const handleMouseLeaveTrigger = () => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+    }
+    hideTimerRef.current = setTimeout(() => {
+      setIsRevealed(false);
+    }, 420);
+  };
+
+  const isTopBarMode = !isHomePage && windowControlsMode === 'top-bar';
+
+  // Common Window Control Buttons Group
+  const renderControlButtons = () => (
+    <>
+      {isIncognito && (
+        <span
+          style={{
+            fontSize: 10.5,
+            fontWeight: 700,
+            color: '#D8B4FE',
+            padding: '0 7px',
+            letterSpacing: 0.4
+          }}
+        >
+          ANÔNIMO
+        </span>
+      )}
+
+      {/* Antigravity-Style Update Button */}
+      {updateInfo && (
+        <div style={{ position: 'relative' }}>
+          <button
+            title="Nova versão do Tessera pronta para instalar"
+            onClick={() => setUpdateModalOpen((v) => !v)}
             style={{
-              fontSize: 10.5,
-              fontWeight: 700,
-              color: '#D8B4FE',
-              padding: '0 7px',
-              letterSpacing: 0.4
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '2px 8px',
+              borderRadius: 999,
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--accent-primary)',
+              color: 'var(--text-primary)',
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+              marginRight: 4
             }}
           >
-            ANÔNIMO
-          </span>
-        )}
-
-        {/* Antigravity-Style Update Button */}
-        {updateInfo && (
-          <div style={{ position: 'relative' }}>
-            <button
-              title="Nova versão do Tessera pronta para instalar"
-              onClick={() => setUpdateModalOpen((v) => !v)}
+            <span
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '2px 8px',
-                borderRadius: 999,
+                width: 6.5,
+                height: 6.5,
+                borderRadius: '50%',
+                background: '#34C759',
+                boxShadow: '0 0 6px #34C759',
+                animation: 'pulse 1.4s infinite'
+              }}
+            />
+            <span>Update</span>
+          </button>
+
+          {/* Update Info Popover */}
+          {updateModalOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                top: 'calc(100% + 8px)',
+                right: 0,
+                width: 250,
+                borderRadius: 16,
                 background: 'var(--bg-elevated)',
-                border: '1px solid var(--accent-primary)',
-                color: 'var(--text-primary)',
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-                marginRight: 4
+                border: '1px solid var(--border-hairline)',
+                boxShadow: 'var(--shadow-floating)',
+                backdropFilter: 'blur(32px) saturate(190%)',
+                padding: '12px 14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                zIndex: 9999
               }}
             >
-              <span
-                style={{
-                  width: 6.5,
-                  height: 6.5,
-                  borderRadius: '50%',
-                  background: '#34C759',
-                  boxShadow: '0 0 6px #34C759',
-                  animation: 'pulse 1.4s infinite'
-                }}
-              />
-              <span>Update</span>
-            </button>
-
-            {/* Update Info Popover */}
-            {updateModalOpen && (
-              <div
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 8px)',
-                  right: 0,
-                  width: 250,
-                  borderRadius: 16,
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border-hairline)',
-                  boxShadow: 'var(--shadow-floating)',
-                  backdropFilter: 'blur(32px) saturate(190%)',
-                  padding: '12px 14px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                  zIndex: 9999
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-                    Tessera {updateInfo.version ? `v${updateInfo.version}` : 'Update'}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: 9.5,
-                      fontWeight: 600,
-                      color:
-                        updateInfo.status === 'downloaded'
-                          ? '#34C759'
-                          : updateInfo.status === 'available'
-                          ? '#34C759'
-                          : '#007AFF',
-                      background:
-                        updateInfo.status === 'downloaded' || updateInfo.status === 'available'
-                          ? 'rgba(52, 199, 89, 0.15)'
-                          : 'rgba(0, 122, 255, 0.15)',
-                      padding: '2px 6px',
-                      borderRadius: 6
-                    }}
-                  >
-                    {updateInfo.status === 'downloaded'
-                      ? 'Pronto'
-                      : updateInfo.status === 'available'
-                      ? 'Nova Versão'
-                      : 'Baixando...'}
-                  </span>
-                </div>
-                <p style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Tessera {updateInfo.version ? `v${updateInfo.version}` : 'Update'}
+                </span>
+                <span
+                  style={{
+                    fontSize: 9.5,
+                    fontWeight: 600,
+                    color:
+                      updateInfo.status === 'downloaded'
+                        ? '#34C759'
+                        : updateInfo.status === 'available'
+                        ? '#34C759'
+                        : '#007AFF',
+                    background:
+                      updateInfo.status === 'downloaded' || updateInfo.status === 'available'
+                        ? 'rgba(52, 199, 89, 0.15)'
+                        : 'rgba(0, 122, 255, 0.15)',
+                    padding: '2px 6px',
+                    borderRadius: 6
+                  }}
+                >
                   {updateInfo.status === 'downloaded'
-                    ? 'Uma nova atualização foi baixada e está pronta para ser aplicada.'
+                    ? 'Pronto'
                     : updateInfo.status === 'available'
-                    ? `Uma nova versão (${updateInfo.version ? `v${updateInfo.version}` : ''}) está disponível no canal oficial.`
-                    : 'Baixando atualização em segundo plano...'}
-                </p>
-                {updateInfo.status === 'downloaded' ? (
-                  <button
-                    onClick={() => window.tesseraApi?.quitAndInstallUpdate()}
-                    style={{
-                      padding: '7px 10px',
-                      borderRadius: 9,
-                      background: 'var(--accent-primary)',
-                      color: '#FFF',
-                      fontWeight: 600,
-                      fontSize: 11.5,
-                      border: 'none',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      transition: 'opacity 0.15s ease'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
-                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-                  >
-                    <ArrowUpCircle size={13} />
-                    <span>Reiniciar e Atualizar</span>
-                  </button>
-                ) : updateInfo.downloadUrl ? (
-                  <button
-                    onClick={() => {
-                      if (updateInfo.downloadUrl) {
-                        window.tesseraApi?.openExternalUrl(updateInfo.downloadUrl);
-                      }
-                    }}
-                    style={{
-                      padding: '7px 10px',
-                      borderRadius: 9,
-                      background: 'var(--accent-primary)',
-                      color: '#FFF',
-                      fontWeight: 600,
-                      fontSize: 11.5,
-                      border: 'none',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      transition: 'opacity 0.15s ease'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
-                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-                  >
-                    <ExternalLink size={13} />
-                    <span>Baixar Versão Oficial</span>
-                  </button>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-tertiary)', padding: '4px 0' }}>
-                    <Download size={13} style={{ animation: 'bounce 1s infinite' }} />
-                    <span>Download em andamento...</span>
-                  </div>
-                )}
+                    ? 'Nova Versão'
+                    : 'Baixando...'}
+                </span>
               </div>
-            )}
+              <p style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                {updateInfo.status === 'downloaded'
+                  ? 'Uma nova atualização foi baixada e está pronta para ser aplicada.'
+                  : updateInfo.status === 'available'
+                  ? `Uma nova versão (${updateInfo.version ? `v${updateInfo.version}` : ''}) está disponível no canal oficial.`
+                  : 'Baixando atualização em segundo plano...'}
+              </p>
+              {updateInfo.status === 'downloaded' ? (
+                <button
+                  onClick={() => window.tesseraApi?.quitAndInstallUpdate()}
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: 9,
+                    background: 'var(--accent-primary)',
+                    color: '#FFF',
+                    fontWeight: 600,
+                    fontSize: 11.5,
+                    border: 'none',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    transition: 'opacity 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+                >
+                  <ArrowUpCircle size={13} />
+                  <span>Reiniciar e Atualizar</span>
+                </button>
+              ) : updateInfo.downloadUrl ? (
+                <button
+                  onClick={() => {
+                    if (updateInfo.downloadUrl) {
+                      window.tesseraApi?.openExternalUrl(updateInfo.downloadUrl);
+                    }
+                  }}
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: 9,
+                    background: 'var(--accent-primary)',
+                    color: '#FFF',
+                    fontWeight: 600,
+                    fontSize: 11.5,
+                    border: 'none',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    transition: 'opacity 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+                >
+                  <ExternalLink size={13} />
+                  <span>Baixar Versão Oficial</span>
+                </button>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-tertiary)', padding: '4px 0' }}>
+                  <Download size={13} style={{ animation: 'bounce 1s infinite' }} />
+                  <span>Download em andamento...</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        title="Minimizar"
+        onClick={() => window.tesseraApi.windowMinimize()}
+        style={winBtnStyle}
+        onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+        onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+      >
+        <Minus size={13} />
+      </button>
+      <button
+        title={isMaximized ? 'Restaurar' : 'Maximizar'}
+        onClick={handleToggleMax}
+        style={winBtnStyle}
+        onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+        onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+      >
+        {isMaximized ? <Copy size={11.5} /> : <Square size={11.5} />}
+      </button>
+      <button
+        title="Fechar"
+        onClick={() => window.tesseraApi.windowClose()}
+        style={winBtnStyle}
+        onMouseOver={(e) => {
+          e.currentTarget.style.background = '#FF3B30';
+          e.currentTarget.style.color = '#FFFFFF';
+        }}
+        onMouseOut={(e) => {
+          e.currentTarget.style.background = 'transparent';
+          e.currentTarget.style.color = 'inherit';
+        }}
+      >
+        <X size={13.5} />
+      </button>
+    </>
+  );
+
+  return (
+    <>
+      {/* MODE 1: Top Bar Strip (Reserved 28px) — Guarantees web page headers are NEVER overlapped */}
+      {isTopBarMode && (
+        <div
+          className="app-drag-region"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 28,
+            background: 'var(--bg-canvas)',
+            borderBottom: '1px solid var(--border-hairline)',
+            zIndex: 95,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            paddingRight: 8,
+            userSelect: 'none'
+          }}
+        >
+          <div
+            className="app-no-drag"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2
+            }}
+          >
+            {renderControlButtons()}
           </div>
-        )}
-        <button
-          title="Minimizar"
-          onClick={() => window.tesseraApi.windowMinimize()}
-          style={winBtnStyle}
-          onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-          onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
-        >
-          <Minus size={13} />
-        </button>
-        <button
-          title={isMaximized ? 'Restaurar' : 'Maximizar'}
-          onClick={handleToggleMax}
-          style={winBtnStyle}
-          onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-          onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
-        >
-          {isMaximized ? <Copy size={11.5} /> : <Square size={11.5} />}
-        </button>
-        <button
-          title="Fechar"
-          onClick={() => window.tesseraApi.windowClose()}
-          style={winBtnStyle}
-          onMouseOver={(e) => {
-            e.currentTarget.style.background = '#FF3B30';
-            e.currentTarget.style.color = '#FFFFFF';
-          }}
-          onMouseOut={(e) => {
-            e.currentTarget.style.background = 'transparent';
-            e.currentTarget.style.color = 'inherit';
-          }}
-        >
-          <X size={13.5} />
-        </button>
-      </div>
+        </div>
+      )}
+
+      {/* MODE 2: Auto-Hide Floating Pill (Default) or StartPage Floating Pill */}
+      {!isTopBarMode && (
+        <>
+          {/* Top window drag strip */}
+          <div
+            className="app-drag-region"
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 140,
+              height: isHomePage ? 28 : 6,
+              zIndex: 90
+            }}
+          />
+
+          {/* Invisible mouse hover trigger zone on web pages (top-right corner) */}
+          {!isHomePage && (
+            <div
+              className="app-no-drag"
+              onMouseEnter={handleMouseEnterTrigger}
+              onMouseLeave={handleMouseLeaveTrigger}
+              style={{
+                position: 'fixed',
+                top: 0,
+                right: 0,
+                width: 170,
+                height: 22,
+                zIndex: 96,
+                background: 'transparent'
+              }}
+            />
+          )}
+
+          {/* Floating Controls Pill */}
+          <div
+            className="app-no-drag"
+            onMouseEnter={() => {
+              setHovered(true);
+              if (!isHomePage) handleMouseEnterTrigger();
+            }}
+            onMouseLeave={() => {
+              setHovered(false);
+              if (!isHomePage) handleMouseLeaveTrigger();
+            }}
+            style={{
+              position: 'fixed',
+              top: 8,
+              right: 10,
+              zIndex: 97,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              padding: '3px 5px',
+              borderRadius: 999,
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-hairline)',
+              boxShadow: hovered || isRevealed ? 'var(--shadow-floating)' : 'none',
+              backdropFilter: 'blur(20px) saturate(180%)',
+              opacity: isHomePage ? (hovered ? 1 : 0.88) : isRevealed ? 0.98 : 0,
+              transform: isHomePage ? 'translateY(0)' : isRevealed ? 'translateY(0)' : 'translateY(-14px)',
+              pointerEvents: isHomePage || isRevealed ? 'auto' : 'none',
+              transition:
+                'opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease'
+            }}
+          >
+            {renderControlButtons()}
+          </div>
+        </>
+      )}
 
       {/* Download Visual Banner (Inherited from DownloadVisualBanner.kt) */}
       {activeDownloadBanner && (
@@ -297,7 +395,7 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
           className="modal-animate-in app-no-drag"
           style={{
             position: 'fixed',
-            top: 48,
+            top: isTopBarMode ? 36 : 48,
             right: 16,
             zIndex: 110,
             width: 330,
@@ -393,5 +491,6 @@ const winBtnStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  transition: 'background-color 0.14s ease, color 0.14s ease'
+  transition: 'background-color 0.14s ease, color 0.14s ease',
+  cursor: 'pointer'
 };
