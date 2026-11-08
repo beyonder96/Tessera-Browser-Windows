@@ -16,7 +16,12 @@ import {
   serializeToAndroidCompatibleBackup,
   StorageService
 } from './storageService';
-import { getStandardChromiumUserAgent, PrivacyShieldController } from './privacyEngine';
+import {
+  getStandardChromiumUserAgent,
+  GOOGLE_AUTH_FIREFOX_UA,
+  isGoogleLoginEndpoint,
+  PrivacyShieldController
+} from './privacyEngine';
 import { TesseraAiService } from './aiService';
 import { DownloadController } from './downloadManager';
 import { LocalBridgeServer } from './localBridgeServer';
@@ -271,6 +276,17 @@ app.whenReady().then(async () => {
     registerShortcutInterceptor(contents);
     contents.setUserAgent(getStandardChromiumUserAgent());
 
+    contents.on('did-start-navigation', (_ev, url) => {
+      try {
+        const u = new URL(url);
+        if (isGoogleLoginEndpoint(u.hostname)) {
+          contents.setUserAgent(GOOGLE_AUTH_FIREFOX_UA);
+        } else {
+          contents.setUserAgent(getStandardChromiumUserAgent());
+        }
+      } catch {}
+    });
+
     contents.setWindowOpenHandler((details) => {
       const url = details.url;
       const isOAuthPopupUrl =
@@ -345,7 +361,16 @@ app.whenReady().then(async () => {
   app.on('browser-window-created', (_ev, win) => {
     if (win !== mainWindow) {
       registerShortcutInterceptor(win.webContents);
-      win.webContents.setUserAgent(getStandardChromiumUserAgent());
+      const initialUrl = win.webContents.getURL();
+      try {
+        if (initialUrl && isGoogleLoginEndpoint(new URL(initialUrl).hostname)) {
+          win.webContents.setUserAgent(GOOGLE_AUTH_FIREFOX_UA);
+        } else {
+          win.webContents.setUserAgent(getStandardChromiumUserAgent());
+        }
+      } catch {
+        win.webContents.setUserAgent(getStandardChromiumUserAgent());
+      }
       win.once('ready-to-show', () => {
         if (!win.isDestroyed()) {
           win.show();

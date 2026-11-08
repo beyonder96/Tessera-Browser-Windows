@@ -86,8 +86,9 @@ export function buildChromeMainWorldCompatScript(chromeMajor: string, chromeFull
         ? window.location.hostname.toLowerCase()
         : '';
       if (host === 'accounts.google.com' || host.endsWith('.accounts.google.com') || host === 'accounts.youtube.com') {
-        try { delete window.chrome; } catch (e) {}
-        try { delete window.IdentityCredential; } catch (e) {}
+        try { Object.defineProperty(window, 'chrome', { value: undefined, configurable: true, writable: true }); } catch (e) {}
+        try { Object.defineProperty(window, 'IdentityCredential', { value: undefined, configurable: true, writable: true }); } catch (e) {}
+        try { Object.defineProperty(navigator, 'userAgentData', { value: undefined, configurable: true, writable: true }); } catch (e) {}
         return;
       }
 
@@ -210,11 +211,21 @@ export function buildChromeMainWorldCompatScript(chromeMajor: string, chromeFull
           const origCredentialsGet = navigator.credentials.get.bind(navigator.credentials);
           navigator.credentials.get = function(options) {
             if (options && options.mediation === 'conditional') {
-              return new Promise(function(_, reject) {
+              if (options.signal && options.signal.aborted) {
+                return Promise.reject(new DOMException('The user canceled the operation or aborted.', 'AbortError'));
+              }
+              return new Promise(function(resolve, reject) {
                 if (options.signal) {
                   options.signal.addEventListener('abort', function() {
                     reject(new DOMException('The user canceled the operation or aborted.', 'AbortError'));
                   });
+                }
+                // Immediately resolve to null so pages (Gemini, Google, Reddit) know no conditional passkey
+                // is present without hanging initialization or triggering watchdog timeouts.
+                if (typeof queueMicrotask === 'function') {
+                  queueMicrotask(function() { resolve(null); });
+                } else {
+                  setTimeout(function() { resolve(null); }, 0);
                 }
               });
             }
@@ -504,7 +515,12 @@ export class PrivacyShieldController {
         }
 
         // Never interfere with Google / OAuth / SSO authentication endpoints or their subresources
-        if (isAuthProtectedHostname(host) || isAuthProtectedHostname(rawInitiatorHost)) {
+        if (
+          isAuthProtectedHostname(host) ||
+          isGoogleAuthHost(host) ||
+          isAuthProtectedHostname(rawInitiatorHost) ||
+          isGoogleAuthHost(rawInitiatorHost)
+        ) {
           callback({ cancel: false });
           return;
         }

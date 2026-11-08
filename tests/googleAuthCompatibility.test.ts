@@ -109,10 +109,11 @@ describe('Google Sign-In & Chromium Auth Compatibility', () => {
     expect(await mockWindow.PublicKeyCredential.isConditionalMediationAvailable()).toBe(false);
     expect(mockWindow.IdentityCredential).toBeUndefined();
 
-    // Testa chamada de mediação condicional interceptada sem lançar erro nem chamar get original
+    // Testa chamada de mediação condicional interceptada retornando null (sem travar a página)
     const conditionalPromise = mockWindow.navigator.credentials.get({ mediation: 'conditional' });
     expect(mockWindow.navigator.credentials.get).toBeDefined();
     expect(conditionalPromise).toBeInstanceOf(Promise);
+    expect(await conditionalPromise).toBeNull();
 
     // Testa chamada com identity (FedCM) rejeitada com NotSupportedError para ativar fallback de popup
     await expect(mockWindow.navigator.credentials.get({ identity: {} })).rejects.toThrow(
@@ -136,6 +137,6 @@ describe('Google Sign-In & Chromium Auth Compatibility', () => {
 
     expect(mockWindow.chrome).toBeUndefined();
     expect(mockWindow.IdentityCredential).toBeUndefined();
-    expect((mockWindow.navigator.userAgentData as any).brands).toBeUndefined();
+    expect(mockWindow.navigator.userAgentData).toBeUndefined();
   });
 });

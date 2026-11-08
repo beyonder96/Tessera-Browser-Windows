@@ -125,7 +125,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
     ref
   ) => {
     const webviewRefs = useRef<Record<string, ElectronWebviewElement | null>>({});
-    const initializedUrls = useRef<Record<string, string>>({});
+    const tabInitialSrcMap = useRef<Record<string, string>>({});
     const darkCssKeys = useRef<Record<string, string>>({});
     const [failedTabs, setFailedTabs] = useState<
       Record<string, { code: number; desc: string; url: string }>
@@ -224,7 +224,6 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       },
       stop: () => getActiveWebview()?.stop(),
       navigateActive: (url: string) => {
-        initializedUrls.current[activeTabId] = url;
         const wv = getActiveWebview();
         setFailedTabs((prev) => {
           const copy = { ...prev };
@@ -233,6 +232,8 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         });
         if (wv) {
           void wv.loadURL(url).catch(() => {});
+        } else {
+          tabInitialSrcMap.current[activeTabId] = sanitizeInitialTabUrl(url);
         }
       },
       extractReaderArticle: async () => {
@@ -581,7 +582,6 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
 
       el.addEventListener('did-navigate', (e: Event) => {
         const navEv = e as unknown as { url: string };
-        initializedUrls.current[tab.id] = navEv.url;
         delete darkCssKeys.current[tab.id];
         setSelectionPopup(null);
 
@@ -604,7 +604,6 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       el.addEventListener('did-navigate-in-page', (e: Event) => {
         const navEv = e as unknown as { url: string; isMainFrame?: boolean };
         if (navEv.isMainFrame === false) return;
-        initializedUrls.current[tab.id] = navEv.url;
         latestPropsRef.current.onUpdateTab(tab.id, {
           url: navEv.url,
           canGoBack: el.canGoBack(),
@@ -771,19 +770,29 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
       });
     };
 
+    // Clean up closed tabs from initial src map
+    const activeTabIds = new Set(tabs.map((t) => t.id));
+    for (const id of Object.keys(tabInitialSrcMap.current)) {
+      if (!activeTabIds.has(id)) {
+        delete tabInitialSrcMap.current[id];
+      }
+    }
+
     // Keep tabs mounted in webview pool if they have active web content or were already initialized,
     // preventing DOM destruction and loss of navigation history when visiting Home.
-    const webTabs = tabs.filter((t) => !t.isHomePage || !!initializedUrls.current[t.id]);
+    const webTabs = tabs.filter((t) => !t.isHomePage || !!tabInitialSrcMap.current[t.id]);
 
     return (
       <div style={{ width: '100%', height: '100%', position: 'relative' }}>
         {webTabs.map((tab) => {
           const isCurrent = tab.id === activeTabId;
           const partition = tab.isIncognito ? 'incognito_session' : `persist:${tab.spaceId}`;
-          // Freeze initial src per tab mount to eliminate duplicate loads and SPA resets
-          const initialSrc =
-            initializedUrls.current[tab.id] || sanitizeInitialTabUrl(tab.url || 'about:blank');
-          initializedUrls.current[tab.id] = initialSrc;
+          // Freeze initial src permanently per tab mount so React never mutates webview.src on subsequent renders,
+          // eliminating duplicate loads, SPA resets on Gemini/X/YouTube and loss of chat state.
+          if (!tabInitialSrcMap.current[tab.id]) {
+            tabInitialSrcMap.current[tab.id] = sanitizeInitialTabUrl(tab.url || 'about:blank');
+          }
+          const initialSrc = tabInitialSrcMap.current[tab.id];
           const failure = failedTabs[tab.id];
 
           return (
