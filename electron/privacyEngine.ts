@@ -303,7 +303,7 @@ export class PrivacyShieldController {
           {
             manifest_version: 3,
             name: 'Chromium Web Compatibility',
-            version: '1.0.5',
+            version: '1.0.6',
             content_scripts: [
               {
                 matches: ['<all_urls>'],
