@@ -16,12 +16,8 @@ import {
   serializeToAndroidCompatibleBackup,
   StorageService
 } from './storageService';
-import {
-  getStandardChromiumUserAgent,
-  GOOGLE_AUTH_FIREFOX_UA,
-  isGoogleLoginEndpoint,
-  PrivacyShieldController
-} from './privacyEngine';
+import { getStandardChromiumUserAgent, PrivacyShieldController } from './privacyEngine';
+import { configureGuestWebContents, type GuestContentsDeps } from './guestContents';
 import { TesseraAiService } from './aiService';
 import { DownloadController } from './downloadManager';
 import { LocalBridgeServer } from './localBridgeServer';
@@ -263,97 +259,25 @@ app.whenReady().then(async () => {
     });
   }
 
-  function parseFeatureDimension(features: string, key: string, fallback: number): number {
-    const match = new RegExp(`${key}=(\\d+)`, 'i').exec(features);
-    if (match && match[1]) {
-      const val = parseInt(match[1], 10);
-      if (!isNaN(val) && val >= 320 && val <= 1920) return val;
-    }
-    return fallback;
-  }
-
-  function configureGuestWebContents(contents: Electron.WebContents) {
-    registerShortcutInterceptor(contents);
-    contents.setUserAgent(getStandardChromiumUserAgent());
-
-    contents.on('did-start-navigation', (_ev, url) => {
-      try {
-        const u = new URL(url);
-        if (isGoogleLoginEndpoint(u.hostname)) {
-          contents.setUserAgent(GOOGLE_AUTH_FIREFOX_UA);
-        } else {
-          contents.setUserAgent(getStandardChromiumUserAgent());
-        }
-      } catch {}
-    });
-
-    contents.setWindowOpenHandler((details) => {
-      const url = details.url;
-      const isOAuthPopupUrl =
-        /^https:\/\/([^/]+\.)?(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth)/i.test(
-          url
-        ) || /[?&](client_id|response_type|redirect_uri|scope)=/i.test(url);
-
-      // Check if this is a popup window test, OAuth popup, or auxiliary window with dimensions
-      const isPopupTestOrAuxiliary =
-        url === 'about:blank' ||
-        !url ||
-        !!details.features ||
-        details.disposition === 'new-window' ||
-        isOAuthPopupUrl;
-
-      if (isPopupTestOrAuxiliary) {
-        const width = details.features
-          ? parseFeatureDimension(details.features, 'width', isOAuthPopupUrl ? 600 : 900)
-          : isOAuthPopupUrl
-            ? 600
-            : 900;
-        const height = details.features
-          ? parseFeatureDimension(details.features, 'height', isOAuthPopupUrl ? 720 : 680)
-          : isOAuthPopupUrl
-            ? 720
-            : 680;
-
-        // Allow popup creation sharing the exact Space session/cookies (contents.session)
-        // with native top-level window frame so OAuth popups (Google Sign-In, Apple, Microsoft)
-        // and ERP window.open work reliably without clipping or parent docking issues!
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            modal: false,
-            frame: true, // Native title bar with minimize/maximize/close controls
-            autoHideMenuBar: true,
-            center: true,
-            show: true,
-            width,
-            height,
-            webPreferences: {
-              session: contents.session,
-              preload: webviewPreloadPath,
-              nodeIntegration: false,
-              nodeIntegrationInSubFrames: true,
-              contextIsolation: true,
-              sandbox: true,
-              plugins: true
-            }
-          }
-        };
-      }
-
-      // Standard link navigation (target="_blank") opens cleanly as a Tessera tab
-      if (/^https?:\/\//i.test(url) && mainWindow && !mainWindow.isDestroyed()) {
+  const guestDeps: GuestContentsDeps = {
+    getPreloadPath: () => webviewPreloadPath,
+    registerShortcuts: (contents) => registerShortcutInterceptor(contents),
+    openAsTab: (url) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('tessera:open-external-url', url);
-      } else if (/^(mailto|tel|whatsapp|tg):/i.test(url)) {
-        void shell.openExternal(url);
       }
-      return { action: 'deny' };
-    });
-  }
+    },
+    openExternal: (url) => {
+      void shell.openExternal(url).catch(() => {});
+    }
+  };
 
-  // Intercept popups & auxiliary windows (window.open / target="_blank") inside <webview> guests
+  // Intercept popups & auxiliary windows (window.open / target="_blank") inside <webview> guests.
+  // NOTE: the User-Agent is never changed per navigation (see electron/guestContents.ts) to avoid
+  // Chromium reload loops on pages embedding accounts.google.com iframes (x.com, Gemini, YouTube).
   app.on('web-contents-created', (_ev, contents) => {
     if (contents.getType() === 'webview' || contents.getType() === 'window') {
-      configureGuestWebContents(contents);
+      configureGuestWebContents(contents, guestDeps);
     }
   });
 
@@ -361,16 +285,6 @@ app.whenReady().then(async () => {
   app.on('browser-window-created', (_ev, win) => {
     if (win !== mainWindow) {
       registerShortcutInterceptor(win.webContents);
-      const initialUrl = win.webContents.getURL();
-      try {
-        if (initialUrl && isGoogleLoginEndpoint(new URL(initialUrl).hostname)) {
-          win.webContents.setUserAgent(GOOGLE_AUTH_FIREFOX_UA);
-        } else {
-          win.webContents.setUserAgent(getStandardChromiumUserAgent());
-        }
-      } catch {
-        win.webContents.setUserAgent(getStandardChromiumUserAgent());
-      }
       win.once('ready-to-show', () => {
         if (!win.isDestroyed()) {
           win.show();
@@ -447,7 +361,7 @@ app.whenReady().then(async () => {
   });
 
   mainWindow.webContents.on('did-attach-webview', (_event, guestWebContents) => {
-    configureGuestWebContents(guestWebContents);
+    configureGuestWebContents(guestWebContents, guestDeps);
   });
 
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {

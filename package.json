@@ -1,7 +1,7 @@
 {
   "name": "tessera-browser-windows",
   "productName": "Tessera Browser",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Tessera Browser for Windows — Navegador minimalista, editorial e inteligente com Spaces isolados, AirBar flutuante, AdBlock e Tessera AI.",
   "main": "dist-electron/main.js",
   "author": "Tessera Ecosystem",
@@ -12,6 +12,7 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "audit:web": "npm run build && node node_modules/electron/cli.js scripts/webcompat-audit.cjs",
     "build": "node scripts/sync-android-assets.mjs && tsc --noEmit && vite build",
     "build:win": "npm run build && electron-builder --win nsis portable",
     "release": "npm run build && electron-builder --win --publish always"

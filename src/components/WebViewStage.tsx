@@ -24,6 +24,7 @@ import {
   SUMMARY_EXTRACTION_SCRIPT
 } from '../shared/domScripts';
 import { extractCleanHost } from '../shared/searchEngines';
+import { isGoogleRejectionUrl } from '../shared/authUrls';
 import type { WebContextMenuData } from './WebContextMenu';
 
 export interface WebViewStageHandle {
@@ -94,7 +95,7 @@ function isAuthProtectedUrl(rawUrl: string): boolean {
 }
 
 function sanitizeInitialTabUrl(rawUrl: string): string {
-  if (/^https:\/\/accounts\.google\.com\/(v3\/)?signin\/rejected/i.test(rawUrl)) {
+  if (isGoogleRejectionUrl(rawUrl)) {
     void window.tesseraApi?.clearGoogleAuthCookies?.();
     return 'https://accounts.google.com/';
   }
@@ -539,38 +540,8 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         }, 850);
       });
 
-      el.addEventListener('new-window', (e: Event) => {
-        const newWinEv = e as unknown as {
-          url?: string;
-          disposition?: string;
-          options?: { width?: number; height?: number };
-        };
-        const targetUrl = newWinEv.url || '';
-        if (!targetUrl || targetUrl.startsWith('about:blank')) {
-          // Handled natively by Electron's setWindowOpenHandler
-          return;
-        }
-
-        const isOAuthUrl =
-          /^https:\/\/([^/]+\.)?(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth)/i.test(
-            targetUrl
-          ) || /[?&](client_id|response_type|redirect_uri|scope)=/i.test(targetUrl);
-
-        const hasPopupDimensions =
-          Boolean(newWinEv.options && (newWinEv.options.width || newWinEv.options.height));
-        const isPopupWindow =
-          newWinEv.disposition === 'new-window' || hasPopupDimensions || isOAuthUrl;
-
-        // If it's an OAuth popup or auxiliary dialog, let Electron's setWindowOpenHandler
-        // spawn the native BrowserWindow child with window.opener intact!
-        if (isPopupWindow) {
-          return;
-        }
-
-        // Standard target="_blank" navigations: prevent default window creation and open cleanly as a tab in Tessera Browser
-        (e as unknown as { preventDefault?: () => void }).preventDefault?.();
-        latestPropsRef.current.onOpenNewTab?.(targetUrl, tab.isIncognito);
-      });
+      // NOTE: the <webview> 'new-window' event was removed in Electron 22+. Popups and target="_blank"
+      // links are routed by setWindowOpenHandler in electron/guestContents.ts (OAuth popup vs Tessera tab).
 
       el.addEventListener('media-started-playing', () => {
         latestPropsRef.current.onUpdateTab(tab.id, { isPlayingMedia: true });
@@ -585,10 +556,7 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         delete darkCssKeys.current[tab.id];
         setSelectionPopup(null);
 
-        if (
-          navEv.url.includes('accounts.google.com') &&
-          (navEv.url.includes('rejected') || navEv.url.includes('7675428'))
-        ) {
+        if (isGoogleRejectionUrl(navEv.url)) {
           const tabPartition = tab.isIncognito ? 'incognito_session' : `persist:${tab.spaceId}`;
           void window.tesseraApi?.clearGoogleAuthCookies?.(tabPartition);
         }

@@ -7,6 +7,7 @@ import {
   isAdOrTracker,
   TIME_SAVED_PER_BLOCKED_MS
 } from '../src/shared/privacyRules';
+import { isGoogleRejectionUrl } from '../src/shared/authUrls';
 import type { SiteSettings, TrackerCategory } from '../src/shared/types';
 
 const AUTH_PROTECTED_HOSTS: ReadonlySet<string> = new Set([
@@ -303,7 +304,7 @@ export class PrivacyShieldController {
           {
             manifest_version: 3,
             name: 'Chromium Web Compatibility',
-            version: '1.0.6',
+            version: '1.0.7',
             content_scripts: [
               {
                 matches: ['<all_urls>'],
@@ -615,13 +616,12 @@ export class PrivacyShieldController {
       callback({ requestHeaders: details.requestHeaders });
     });
 
-    // Auto-wipe rejection cookies if Google redirects to the rejection/help page
+    // Auto-wipe rejection cookies if Google redirects to the rejection/help page.
+    // Match the path strictly: a loose includes('rejected') also matches legitimate continue= params
+    // and would wipe accounts.google.com storage in the middle of a healthy login flow.
     ses.webRequest.onResponseStarted((details) => {
       try {
-        if (
-          details.url.includes('accounts.google.com') &&
-          (details.url.includes('rejected') || details.url.includes('7675428'))
-        ) {
+        if (details.resourceType === 'mainFrame' && isGoogleRejectionUrl(details.url)) {
           void this.sanitizeUnauthenticatedGoogleRejectionCookies(ses);
         }
       } catch {}

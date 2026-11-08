@@ -11,3 +11,4 @@ build/comparison-*.png
 build/variation-*.png
 build/shadow-*.png
 *.cer
+audit-reports/
