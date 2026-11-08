@@ -566,7 +566,8 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
           return;
         }
 
-        // Standard target="_blank" navigations open cleanly as a tab in Tessera Browser
+        // Standard target="_blank" navigations: prevent default window creation and open cleanly as a tab in Tessera Browser
+        (e as unknown as { preventDefault?: () => void }).preventDefault?.();
         latestPropsRef.current.onOpenNewTab?.(targetUrl, tab.isIncognito);
       });
 

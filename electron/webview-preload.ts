@@ -9,6 +9,17 @@ try {
   const chromePatchScript = `
     (function() {
       try {
+        // On accounts.google.com, we present as genuine Firefox Desktop to prevent BotGuard CEF rejection.
+        // Do not inject synthetic window.chrome or monkey-patch NavigatorUAData.
+        const host = (typeof window !== 'undefined' && window.location && window.location.hostname)
+          ? window.location.hostname.toLowerCase()
+          : '';
+        if (host === 'accounts.google.com' || host.endsWith('.accounts.google.com') || host === 'accounts.youtube.com') {
+          try { delete (window as any).chrome; } catch (e) {}
+          try { delete (window as any).IdentityCredential; } catch (e) {}
+          return;
+        }
+
         const major = ${JSON.stringify(chromeMajor)};
         const full = ${JSON.stringify(chromeFull)};
         const brandList = [

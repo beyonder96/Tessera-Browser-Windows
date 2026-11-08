@@ -11,17 +11,34 @@ import {
   buildChromeClientHintHeaders,
   buildChromeMainWorldCompatScript,
   getStandardChromiumUserAgent,
+  GOOGLE_AUTH_FIREFOX_UA,
   isAuthProtectedHostname,
-  isGoogleAuthHost
+  isGoogleAuthHost,
+  isGoogleLoginEndpoint
 } from '../electron/privacyEngine';
 
 describe('Google Sign-In & Chromium Auth Compatibility', () => {
-  it('gera User-Agent Chromium reduzido padrão sem tokens Electron/Tessera e alinhado à versão major', () => {
+  it('gera User-Agent Firefox para endpoints de login Google e Chromium reduzido para navegação geral', () => {
     const ua = getStandardChromiumUserAgent();
     expect(ua).not.toMatch(/Electron\//i);
     expect(ua).not.toMatch(/Tessera/i);
     expect(ua).not.toContain('120.0.6099.225');
     expect(ua).toMatch(/Mozilla\/5\.0 \(Windows NT 10\.0; Win64; x64\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/\d+\.0\.0\.0 Safari\/537\.36/);
+
+    expect(GOOGLE_AUTH_FIREFOX_UA).toContain('Firefox');
+    expect(GOOGLE_AUTH_FIREFOX_UA).not.toContain('Chrome');
+    expect(GOOGLE_AUTH_FIREFOX_UA).not.toContain('Electron');
+  });
+
+  it('identifica endpoints de login Google especificamente para contorno seguro do BotGuard', () => {
+    expect(isGoogleLoginEndpoint('accounts.google.com')).toBe(true);
+    expect(isGoogleLoginEndpoint('accounts.youtube.com')).toBe(true);
+    expect(isGoogleLoginEndpoint('myaccount.google.com')).toBe(true);
+    expect(isGoogleLoginEndpoint('oauth2.googleapis.com')).toBe(true);
+    expect(isGoogleLoginEndpoint('gds.google.com')).toBe(true);
+    expect(isGoogleLoginEndpoint('x.com')).toBe(false);
+    expect(isGoogleLoginEndpoint('google.com')).toBe(false);
+    expect(isGoogleLoginEndpoint('youtube.com')).toBe(false);
   });
 
   it('identifica domínios críticos de autenticação OAuth/SSO para proteção contra injeção DOM e falso-positivo de bloqueio', () => {
@@ -101,5 +118,24 @@ describe('Google Sign-In & Chromium Auth Compatibility', () => {
     await expect(mockWindow.navigator.credentials.get({ identity: {} })).rejects.toThrow(
       /Federated credential mediation is not supported/
     );
+  });
+
+  it('não injeta mocks de window.chrome nem modifica protótipos em accounts.google.com', () => {
+    const script = buildChromeMainWorldCompatScript('156', '156.0.8078.75');
+    class MockUAData {}
+    const mockWindow: any = {
+      location: { hostname: 'accounts.google.com' },
+      chrome: { csi: () => {}, app: {} },
+      navigator: {
+        userAgentData: new MockUAData()
+      }
+    };
+
+    const fn = new Function('window', 'navigator', `${script}`);
+    fn(mockWindow, mockWindow.navigator);
+
+    expect(mockWindow.chrome).toBeUndefined();
+    expect(mockWindow.IdentityCredential).toBeUndefined();
+    expect((mockWindow.navigator.userAgentData as any).brands).toBeUndefined();
   });
 });

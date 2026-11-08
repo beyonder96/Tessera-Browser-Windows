@@ -29,6 +29,9 @@ import type { HistoryEntry, PersistedAppState, SiteSettings, SpeedDialItem } fro
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Disable FedCM (which lacks native UI in Electron webviews) and native Windows WebAuthn modal
+app.commandLine.appendSwitch('disable-features', 'FedCm,WebAuthenticationUseNativeWinApi');
+
 // Ensure global Chromium Reduced User-Agent (without "Electron/" or app wrapper tokens)
 // is applied before any session, worker, popup BrowserWindow, or <webview> is created.
 app.userAgentFallback = getStandardChromiumUserAgent();
@@ -264,79 +267,97 @@ app.whenReady().then(async () => {
     return fallback;
   }
 
-  // Intercept popups & auxiliary windows (window.open / target="_blank") inside <webview> guests
-  app.on('web-contents-created', (_ev, contents) => {
+  function configureGuestWebContents(contents: Electron.WebContents) {
     registerShortcutInterceptor(contents);
     contents.setUserAgent(getStandardChromiumUserAgent());
-    if (contents.getType() === 'webview' || contents.getType() === 'window') {
-      contents.setWindowOpenHandler((details) => {
-        const url = details.url;
-        const isOAuthPopupUrl =
-          /^https:\/\/([^/]+\.)?(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth)/i.test(
-            url
-          ) || /[?&](client_id|response_type|redirect_uri|scope)=/i.test(url);
 
-        // Check if this is a popup window test, OAuth popup, or auxiliary window with dimensions
-        const isPopupTestOrAuxiliary =
-          url === 'about:blank' ||
-          !url ||
-          !!details.features ||
-          details.disposition === 'new-window' ||
-          isOAuthPopupUrl;
+    contents.setWindowOpenHandler((details) => {
+      const url = details.url;
+      const isOAuthPopupUrl =
+        /^https:\/\/([^/]+\.)?(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth)/i.test(
+          url
+        ) || /[?&](client_id|response_type|redirect_uri|scope)=/i.test(url);
 
-        if (isPopupTestOrAuxiliary) {
-          const width = details.features
-            ? parseFeatureDimension(details.features, 'width', isOAuthPopupUrl ? 600 : 900)
-            : isOAuthPopupUrl
-              ? 600
-              : 900;
-          const height = details.features
-            ? parseFeatureDimension(details.features, 'height', isOAuthPopupUrl ? 720 : 680)
-            : isOAuthPopupUrl
-              ? 720
-              : 680;
+      // Check if this is a popup window test, OAuth popup, or auxiliary window with dimensions
+      const isPopupTestOrAuxiliary =
+        url === 'about:blank' ||
+        !url ||
+        !!details.features ||
+        details.disposition === 'new-window' ||
+        isOAuthPopupUrl;
 
-          // Allow popup creation sharing the exact Space session/cookies (contents.session)
-          // with native window frame so OAuth popups (Google Sign-In) and ERP window.open work natively!
-          return {
-            action: 'allow',
-            overrideBrowserWindowOptions: {
-              parent: mainWindow ?? undefined,
-              modal: false,
-              frame: true, // Native title bar with minimize/maximize/close controls
-              autoHideMenuBar: true,
-              center: true,
-              width,
-              height,
-              webPreferences: {
-                session: contents.session,
-                preload: webviewPreloadPath,
-                nodeIntegration: false,
-                nodeIntegrationInSubFrames: true,
-                contextIsolation: true,
-                sandbox: true,
-                plugins: true
-              }
+      if (isPopupTestOrAuxiliary) {
+        const width = details.features
+          ? parseFeatureDimension(details.features, 'width', isOAuthPopupUrl ? 600 : 900)
+          : isOAuthPopupUrl
+            ? 600
+            : 900;
+        const height = details.features
+          ? parseFeatureDimension(details.features, 'height', isOAuthPopupUrl ? 720 : 680)
+          : isOAuthPopupUrl
+            ? 720
+            : 680;
+
+        // Allow popup creation sharing the exact Space session/cookies (contents.session)
+        // with native top-level window frame so OAuth popups (Google Sign-In, Apple, Microsoft)
+        // and ERP window.open work reliably without clipping or parent docking issues!
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            modal: false,
+            frame: true, // Native title bar with minimize/maximize/close controls
+            autoHideMenuBar: true,
+            center: true,
+            show: true,
+            width,
+            height,
+            webPreferences: {
+              session: contents.session,
+              preload: webviewPreloadPath,
+              nodeIntegration: false,
+              nodeIntegrationInSubFrames: true,
+              contextIsolation: true,
+              sandbox: true,
+              plugins: true
             }
-          };
-        }
+          }
+        };
+      }
 
-        // Standard link navigation (target="_blank") opens cleanly as a Tessera tab
-        if (/^https?:\/\//i.test(url) && mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('tessera:open-external-url', url);
-        } else if (/^(mailto|tel|whatsapp|tg):/i.test(url)) {
-          void shell.openExternal(url);
-        }
-        return { action: 'deny' };
-      });
+      // Standard link navigation (target="_blank") opens cleanly as a Tessera tab
+      if (/^https?:\/\//i.test(url) && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('tessera:open-external-url', url);
+      } else if (/^(mailto|tel|whatsapp|tg):/i.test(url)) {
+        void shell.openExternal(url);
+      }
+      return { action: 'deny' };
+    });
+  }
+
+  // Intercept popups & auxiliary windows (window.open / target="_blank") inside <webview> guests
+  app.on('web-contents-created', (_ev, contents) => {
+    if (contents.getType() === 'webview' || contents.getType() === 'window') {
+      configureGuestWebContents(contents);
     }
   });
 
   // Handle any secondary popup BrowserWindows created via setWindowOpenHandler
   app.on('browser-window-created', (_ev, win) => {
     if (win !== mainWindow) {
-      win.webContents.setUserAgent(getStandardChromiumUserAgent());
       registerShortcutInterceptor(win.webContents);
+      win.webContents.setUserAgent(getStandardChromiumUserAgent());
+      win.once('ready-to-show', () => {
+        if (!win.isDestroyed()) {
+          win.show();
+          win.focus();
+        }
+      });
+      setTimeout(() => {
+        if (!win.isDestroyed() && !win.isVisible()) {
+          win.show();
+          win.focus();
+        }
+      }, 350);
     }
   });
 
@@ -398,6 +419,10 @@ app.whenReady().then(async () => {
     webPreferences.nodeIntegrationInSubFrames = true;
     webPreferences.contextIsolation = true;
     webPreferences.plugins = true; // Enables Chromium's native PDF Viewer plugin!
+  });
+
+  mainWindow.webContents.on('did-attach-webview', (_event, guestWebContents) => {
+    configureGuestWebContents(guestWebContents);
   });
 
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {

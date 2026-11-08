@@ -18,10 +18,29 @@ const AUTH_PROTECTED_HOSTS: ReadonlySet<string> = new Set([
   'apis.google.com',
   'ssl.gstatic.com',
   'www.gstatic.com',
+  'gstatic.com',
+  'lh3.googleusercontent.com',
   'login.microsoftonline.com',
   'login.live.com',
   'appleid.apple.com'
 ]);
+
+export const GOOGLE_AUTH_FIREFOX_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0';
+
+export function isGoogleLoginEndpoint(hostname: string): boolean {
+  const h = hostname.toLowerCase().trim();
+  if (!h) return false;
+  return (
+    h === 'accounts.google.com' ||
+    h.endsWith('.accounts.google.com') ||
+    h === 'accounts.youtube.com' ||
+    h.endsWith('.accounts.youtube.com') ||
+    h === 'myaccount.google.com' ||
+    h === 'oauth2.googleapis.com' ||
+    h === 'gds.google.com'
+  );
+}
 
 export function isAuthProtectedHostname(hostname: string): boolean {
   const h = hostname.toLowerCase().trim();
@@ -61,6 +80,17 @@ export function getStandardChromiumUserAgent(): string {
 export function buildChromeMainWorldCompatScript(chromeMajor: string, chromeFull: string): string {
   return `(function() {
     try {
+      // On accounts.google.com, we present as genuine Firefox Desktop to prevent BotGuard CEF rejection.
+      // Do not inject synthetic window.chrome or monkey-patch NavigatorUAData.
+      const host = (typeof window !== 'undefined' && window.location && window.location.hostname)
+        ? window.location.hostname.toLowerCase()
+        : '';
+      if (host === 'accounts.google.com' || host.endsWith('.accounts.google.com') || host === 'accounts.youtube.com') {
+        try { delete window.chrome; } catch (e) {}
+        try { delete window.IdentityCredential; } catch (e) {}
+        return;
+      }
+
       const major = ${JSON.stringify(chromeMajor)};
       const full = ${JSON.stringify(chromeFull)};
       const brandList = [
@@ -519,8 +549,10 @@ export class PrivacyShieldController {
     const chromeMajor = (process.versions.chrome || '132.0.0.0').split('.')[0];
     const chromeFull = process.versions.chrome || `${chromeMajor}.0.0.0`;
 
-    // Align Google Client Hints (including all 11 Accept-CH headers) and User-Agent headers
-    // so Google Sign-In, OAuth2 popups, YouTube, Gmail & SSO services verify authentic Chrome identity
+    // Align Google Client Hints and User-Agent headers:
+    // For Google login endpoints (accounts.google.com), send Firefox Desktop UA without sec-ch-ua headers
+    // to cleanly bypass closed-source BotGuard embedded-CEF rejection ("Este navegador ou app pode não ser seguro").
+    // For all other hosts (x.com, youtube.com, github.com, etc.), send standard Chromium UA and Client Hints.
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       try {
         const reqUrl = new URL(details.url);
@@ -529,6 +561,19 @@ export class PrivacyShieldController {
           const isLocal = host === 'localhost' || host === '127.0.0.1';
           if (!isLocal) {
             const headers = details.requestHeaders;
+
+            if (isGoogleLoginEndpoint(host)) {
+              for (const key of Object.keys(headers)) {
+                const lower = key.toLowerCase();
+                if (lower === 'user-agent' || lower.startsWith('sec-ch-ua')) {
+                  delete headers[key];
+                }
+              }
+              headers['User-Agent'] = GOOGLE_AUTH_FIREFOX_UA;
+              callback({ requestHeaders: headers });
+              return;
+            }
+
             const includeHighEntropy = isGoogleAuthHost(host) || isAuthProtectedHostname(host);
             const chHeaders = buildChromeClientHintHeaders(chromeMajor, chromeFull, includeHighEntropy);
 
