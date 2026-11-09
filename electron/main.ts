@@ -259,6 +259,16 @@ app.whenReady().then(async () => {
     });
   }
 
+  const preloadPath = path.join(__dirname, 'preload.cjs');
+  const rawWebviewPreload = path.join(__dirname, 'webview-preload.cjs');
+  const unpackedWebviewPreload = rawWebviewPreload.replace('app.asar', 'app.asar.unpacked');
+  const webviewPreloadPath = fs.existsSync(unpackedWebviewPreload)
+    ? unpackedWebviewPreload
+    : rawWebviewPreload;
+  const iconCandidate = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar', 'dist', 'assets', 'icon.png')
+    : path.join(process.cwd(), 'public', 'assets', 'icon.png');
+
   const guestDeps: GuestContentsDeps = {
     getPreloadPath: () => webviewPreloadPath,
     registerShortcuts: (contents) => registerShortcutInterceptor(contents),
@@ -285,18 +295,35 @@ app.whenReady().then(async () => {
   app.on('browser-window-created', (_ev, win) => {
     if (win !== mainWindow) {
       registerShortcutInterceptor(win.webContents);
-      win.once('ready-to-show', () => {
+      const iconPath = fs.existsSync(iconCandidate) ? iconCandidate : undefined;
+      if (iconPath) {
+        try { win.setIcon(iconPath); } catch {}
+      }
+      try {
+        win.setMenuBarVisibility(false);
+        win.setAutoHideMenuBar(true);
+      } catch {}
+
+      const bringToFront = () => {
         if (!win.isDestroyed()) {
-          win.show();
-          win.focus();
+          try {
+            win.show();
+            win.focus();
+            win.moveTop();
+          } catch {}
+        }
+      };
+
+      win.once('ready-to-show', bringToFront);
+      win.webContents.on('did-finish-load', bringToFront);
+      setTimeout(bringToFront, 100);
+      setTimeout(bringToFront, 400);
+
+      win.webContents.on('page-title-updated', (_e, title) => {
+        if (!win.isDestroyed() && title) {
+          try { win.setTitle(title); } catch {}
         }
       });
-      setTimeout(() => {
-        if (!win.isDestroyed() && !win.isVisible()) {
-          win.show();
-          win.focus();
-        }
-      }, 350);
     }
   });
 
@@ -320,16 +347,6 @@ app.whenReady().then(async () => {
     } catch {}
     callback(false);
   });
-
-  const preloadPath = path.join(__dirname, 'preload.cjs');
-  const rawWebviewPreload = path.join(__dirname, 'webview-preload.cjs');
-  const unpackedWebviewPreload = rawWebviewPreload.replace('app.asar', 'app.asar.unpacked');
-  const webviewPreloadPath = fs.existsSync(unpackedWebviewPreload)
-    ? unpackedWebviewPreload
-    : rawWebviewPreload;
-  const iconCandidate = app.isPackaged
-    ? path.join(process.resourcesPath, 'app.asar', 'dist', 'assets', 'icon.png')
-    : path.join(process.cwd(), 'public', 'assets', 'icon.png');
 
   mainWindow = new BrowserWindow({
     width: 1340,

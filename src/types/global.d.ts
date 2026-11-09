@@ -5,7 +5,7 @@ export interface ElectronWebviewElement extends HTMLElement {
   partition: string;
   preload: string;
   useragent: string;
-  allowpopups?: boolean;
+  allowpopups?: boolean | string;
   getURL: () => string;
   getTitle: () => string;
   isLoading: () => boolean;

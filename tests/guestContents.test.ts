@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
+  buildPopupWindowOptions,
   classifyWindowOpen,
   configureGuestWebContents,
   hasPopupFeatures,
@@ -10,7 +11,7 @@ import {
 import { isGoogleRejectionUrl } from '../src/shared/authUrls';
 
 describe('Guest Contents & Popup Routing (Anti-Loop & Classification)', () => {
-  it('classifica corretamente URLs de OAuth para provedores populares', () => {
+  it('classifica corretamente URLs de OAuth para provedores populares e padrões OAuth2', () => {
     expect(
       isOAuthPopupUrl(
         'https://accounts.google.com/o/oauth2/v2/auth?client_id=123&response_type=code&redirect_uri=https://x.com'
@@ -35,14 +36,36 @@ describe('Guest Contents & Popup Routing (Anti-Loop & Classification)', () => {
       )
     ).toBe(true);
 
+    expect(
+      isOAuthPopupUrl(
+        'https://my-tenant.auth0.com/authorize?client_id=123&redirect_uri=https://example.com'
+      )
+    ).toBe(true);
+
+    expect(
+      isOAuthPopupUrl(
+        'https://accounts.spotify.com/authorize?client_id=123'
+      )
+    ).toBe(true);
+
+    expect(
+      isOAuthPopupUrl(
+        'https://api.notion.com/v1/oauth/authorize?client_id=123'
+      )
+    ).toBe(true);
+
     expect(isOAuthPopupUrl('https://example.com/news/article-123')).toBe(false);
   });
 
   it('detecta features de popup que exigem janela auxiliar flutuante', () => {
     expect(hasPopupFeatures('width=600,height=700')).toBe(true);
+    expect(hasPopupFeatures('width=500 height=600')).toBe(true);
+    expect(hasPopupFeatures('width=500;height=600')).toBe(true);
     expect(hasPopupFeatures('popup=1')).toBe(true);
     expect(hasPopupFeatures('popup=yes')).toBe(true);
     expect(hasPopupFeatures('popup')).toBe(true);
+    expect(hasPopupFeatures('toolbar=no,menubar=no')).toBe(true);
+    expect(hasPopupFeatures('location=0,status=0,scrollbars=1')).toBe(true);
     expect(hasPopupFeatures('noopener,noreferrer')).toBe(false);
     expect(hasPopupFeatures(undefined)).toBe(false);
   });
@@ -57,7 +80,7 @@ describe('Guest Contents & Popup Routing (Anti-Loop & Classification)', () => {
       })
     ).toBe('oauth-popup');
 
-    // 2. Aux popup (scripted dialogs ou ERP popups)
+    // 2. Aux popup (scripted dialogs ou ERP popups ou popups com frameName nomeado)
     expect(
       classifyWindowOpen({
         url: 'about:blank',
@@ -69,6 +92,14 @@ describe('Guest Contents & Popup Routing (Anti-Loop & Classification)', () => {
       classifyWindowOpen({
         url: 'https://erp.internal/print_receipt.php',
         features: 'width=800,height=600'
+      })
+    ).toBe('aux-popup');
+
+    // Popup disparado com nome de janela explícito (ex: google_login, auth_popup) sem features explícitas
+    expect(
+      classifyWindowOpen({
+        url: 'https://auth.company.com/login-modal',
+        frameName: 'google_login'
       })
     ).toBe('aux-popup');
 
@@ -84,6 +115,13 @@ describe('Guest Contents & Popup Routing (Anti-Loop & Classification)', () => {
       classifyWindowOpen({
         url: 'https://github.com/trending',
         features: 'noopener,noreferrer'
+      })
+    ).toBe('tab');
+
+    expect(
+      classifyWindowOpen({
+        url: 'https://github.com/trending',
+        frameName: '_blank'
       })
     ).toBe('tab');
 
@@ -112,6 +150,34 @@ describe('Guest Contents & Popup Routing (Anti-Loop & Classification)', () => {
         url: 'file:///C:/Windows/System32/calc.exe'
       })
     ).toBe('deny');
+  });
+
+  it('constrói opções de BrowserWindow adequadas para popups OAuth e auxiliares', () => {
+    const mockSession = {} as any;
+    const preload = 'C:/dummy/preload.cjs';
+
+    const oauthOpts = buildPopupWindowOptions(
+      'oauth-popup',
+      { url: 'https://accounts.google.com/o/oauth2/auth' },
+      mockSession,
+      preload
+    );
+    expect(oauthOpts.width).toBe(520);
+    expect(oauthOpts.height).toBe(640);
+    expect(oauthOpts.minWidth).toBe(380);
+    expect(oauthOpts.minHeight).toBe(460);
+    expect(oauthOpts.frame).toBe(true);
+    expect(oauthOpts.center).toBe(true);
+
+    const customOpts = buildPopupWindowOptions(
+      'aux-popup',
+      { url: 'https://erp.internal/print', features: 'width=750,height=550' },
+      mockSession,
+      preload
+    );
+    expect(customOpts.width).toBe(750);
+    expect(customOpts.height).toBe(550);
+    expect(customOpts.frame).toBe(true);
   });
 
   it('garante que configureGuestWebContents NUNCA altera o User-Agent em navegações (prevenindo loop de recarregamento)', () => {

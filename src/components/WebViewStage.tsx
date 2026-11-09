@@ -511,6 +511,12 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
         return;
       }
       webviewRefs.current[tab.id] = el;
+      try {
+        if (!el.hasAttribute('allowpopups')) {
+          el.setAttribute('allowpopups', 'true');
+        }
+        (el as unknown as { allowpopups?: boolean }).allowpopups = true;
+      } catch {}
 
       el.addEventListener('did-start-loading', () => {
         latestPropsRef.current.onUpdateTab(tab.id, { isLoading: true, progress: 0.28 });
@@ -779,7 +785,9 @@ export const WebViewStage = forwardRef<WebViewStageHandle, WebViewStageProps>(
                   src={initialSrc}
                   partition={partition}
                   preload={webviewPreloadUrl}
-                  allowpopups={true}
+                  // React 19 omits boolean `true` on custom-element properties, so we pass a string at runtime
+                  // cast as boolean for React's type definition while ensuring the DOM attribute is rendered.
+                  allowpopups={"" as unknown as boolean}
                   style={{ width: '100%', height: '100%', border: 'none' }}
                 />
               )}
