@@ -36,6 +36,27 @@ export const WindowChromeOverlay: React.FC<WindowChromeOverlayProps> = ({
   useEffect(() => {
     window.tesseraApi?.windowIsMaximized().then(setIsMaximized).catch(() => {});
 
+    // Proactively check current update status on mount in case it was already detected
+    if (window.tesseraApi?.getUpdateStatus) {
+      window.tesseraApi
+        .getUpdateStatus()
+        .then((payload) => {
+          if (
+            payload &&
+            (payload.status === 'downloaded' || payload.status === 'downloading' || payload.status === 'available')
+          ) {
+            setUpdateInfo({
+              status: payload.status,
+              version: payload.version,
+              releaseNotes: payload.releaseNotes,
+              downloadUrl: payload.downloadUrl,
+              isPortable: payload.isPortable
+            });
+          }
+        })
+        .catch(() => {});
+    }
+
     if (window.tesseraApi?.onUpdateStatus) {
       const unsub = window.tesseraApi.onUpdateStatus((payload) => {
         if (payload.status === 'downloaded' || payload.status === 'downloading' || payload.status === 'available') {

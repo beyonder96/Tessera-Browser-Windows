@@ -95,14 +95,8 @@ export class UpdateService {
 
       updater.on('error', (err) => {
         console.warn('[UpdateService] autoUpdater notice:', err?.message || err);
-        if (!app.isPackaged) {
-          this.sendStatus({ status: 'idle' });
-        } else {
-          this.sendStatus({
-            status: 'error',
-            error: err?.message || 'Erro ao verificar atualizações'
-          });
-        }
+        // Rather than failing immediately, attempt GitHub Releases API fallback
+        void this.fallbackToGitHubRelease(err?.message);
       });
     }
 
@@ -151,14 +145,16 @@ export class UpdateService {
     const currentVersion = app.getVersion();
     const hasUpdate = isNewerVersion(remoteVersion, currentVersion);
     const assets = Array.isArray(data.assets) ? data.assets : [];
+    const isPortable = !app.isPackaged || Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
     const setupAsset = assets.find(
       (a: any) => typeof a.name === 'string' && a.name.includes('Setup') && a.name.endsWith('.exe')
     );
     const portableAsset = assets.find(
       (a: any) => typeof a.name === 'string' && a.name.includes('Portable') && a.name.endsWith('.exe')
     );
-    const downloadUrl =
-      setupAsset?.browser_download_url || portableAsset?.browser_download_url || data.html_url;
+    const downloadUrl = isPortable
+      ? (portableAsset?.browser_download_url || setupAsset?.browser_download_url || data.html_url)
+      : (setupAsset?.browser_download_url || portableAsset?.browser_download_url || data.html_url);
 
     return {
       hasUpdate,
@@ -170,15 +166,47 @@ export class UpdateService {
   }
 
   /**
+   * Graceful fallback that directly queries GitHub Releases API when autoUpdater fails,
+   * runs in a portable executable, or when latest.yml is temporarily unreachable.
+   */
+  public async fallbackToGitHubRelease(initialError?: string): Promise<void> {
+    try {
+      const gh = await this.checkGitHubRelease();
+      if (gh.hasUpdate) {
+        const isPortable = !app.isPackaged || Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
+        this.sendStatus({
+          status: 'available',
+          version: gh.remoteVersion,
+          releaseNotes: gh.releaseNotes,
+          downloadUrl: gh.downloadUrl,
+          isPortable
+        });
+      } else {
+        this.sendStatus({ status: 'idle' });
+      }
+    } catch (e: any) {
+      if (app.isPackaged) {
+        this.sendStatus({
+          status: 'error',
+          error: initialError || e?.message || 'Erro ao verificar atualizações'
+        });
+      } else {
+        this.sendStatus({ status: 'idle' });
+      }
+    }
+  }
+
+  /**
    * Performs an update check using either autoUpdater (packaged NSIS)
    * or GitHub API fallback (unpackaged / portable).
    */
   public async performUpdateCheck(): Promise<ManualUpdateCheckResult> {
     this.sendStatus({ status: 'checking' });
     const currentVersion = app.getVersion();
+    const isPortable = !app.isPackaged || Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
 
-    // 1. Packaged NSIS execution: try official autoUpdater
-    if (app.isPackaged) {
+    // 1. Packaged NSIS execution: try official autoUpdater if not portable
+    if (app.isPackaged && !isPortable) {
       try {
         const updater = this.getUpdaterInstance();
         if (updater) {
@@ -210,7 +238,7 @@ export class UpdateService {
           version: gh.remoteVersion,
           releaseNotes: gh.releaseNotes,
           downloadUrl: gh.downloadUrl,
-          isPortable: !app.isPackaged
+          isPortable
         };
         this.sendStatus(payload);
         return {
@@ -245,22 +273,17 @@ export class UpdateService {
   public checkForUpdatesSilently() {
     setTimeout(async () => {
       try {
-        if (app.isPackaged) {
+        const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
+        if (app.isPackaged && !isPortable) {
           const updater = this.getUpdaterInstance();
-          if (updater) void updater.checkForUpdates();
-        } else {
-          // Dev / local files check against real GitHub releases
-          const gh = await this.checkGitHubRelease();
-          if (gh.hasUpdate) {
-            this.sendStatus({
-              status: 'available',
-              version: gh.remoteVersion,
-              releaseNotes: gh.releaseNotes,
-              downloadUrl: gh.downloadUrl,
-              isPortable: true
+          if (updater) {
+            void updater.checkForUpdates().catch(() => {
+              void this.fallbackToGitHubRelease();
             });
+            return;
           }
         }
+        await this.fallbackToGitHubRelease();
       } catch (err: any) {
         console.warn('[UpdateService] Silent check notice:', err?.message || err);
       }

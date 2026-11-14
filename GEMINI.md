@@ -36,7 +36,7 @@ Diretrizes de arquitetura, compilação e qualidade para o Tessera Browser Windo
 
 3. **Git & Releases:**
    - Commits semânticos (`feat:`, `fix:`, `chore(release): vX.Y.Z`).
-   - Publicar release com instalador NSIS e executável portátil:
+   - Publicar release com instalador NSIS, executável portátil e metadados de auto-update (latest.yml e blockmap):
      ```powershell
-     gh release create "vX.Y.Z" "release/Tessera-Browser-Setup-*.exe" "release/Tessera-Browser-Portable-*.exe" --title "vX.Y.Z" --generate-notes
+     gh release create "vX.Y.Z" "release/Tessera-Browser-Setup-*.exe" "release/Tessera-Browser-Portable-*.exe" "release/latest.yml" "release/Tessera-Browser-Setup-*.exe.blockmap" --title "vX.Y.Z" --generate-notes
      ```

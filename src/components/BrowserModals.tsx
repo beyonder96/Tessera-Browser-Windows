@@ -1108,6 +1108,21 @@ export const FullSettingsModal: React.FC<{
     if (visible && window.tesseraApi?.getSystemInfo) {
       window.tesseraApi.getSystemInfo().then(setSystemInfo).catch(() => {});
     }
+    if (visible && window.tesseraApi?.getUpdateStatus) {
+      window.tesseraApi
+        .getUpdateStatus()
+        .then((status) => {
+          if (status && (status.status === 'available' || status.status === 'downloaded')) {
+            setUpdateCheckStatus('update-available');
+            setUpdateDetails({
+              latestVersion: status.version,
+              releaseNotes: status.releaseNotes,
+              downloadUrl: status.downloadUrl
+            });
+          }
+        })
+        .catch(() => {});
+    }
   }, [visible]);
 
   const handleCheckForUpdates = async () => {
